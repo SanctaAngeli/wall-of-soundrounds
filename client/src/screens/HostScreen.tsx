@@ -45,17 +45,22 @@ export function HostScreen() {
       </div>
 
       <div style={styles.content}>
-        {/* Mini Wall Preview */}
-        <div style={styles.section}>
-          <h2 style={styles.sectionTitle}>Wall Preview</h2>
-          <div style={styles.previewContainer}>
-            <iframe
-              src="/wall?preview"
-              style={styles.previewIframe}
-              title="Wall Preview"
-            />
+        {/* LEFT: sticky wall preview — always in view while host scrolls controls on the right */}
+        <div style={styles.leftCol}>
+          <div style={{ ...styles.section, padding: '8px' }}>
+            <h2 style={{ ...styles.sectionTitle, marginBottom: '6px' }}>Wall Preview</h2>
+            <div style={styles.previewContainer}>
+              <iframe
+                src="/wall?preview"
+                style={styles.previewIframe}
+                title="Wall Preview"
+              />
+            </div>
           </div>
         </div>
+
+        {/* RIGHT: scrollable control stack */}
+        <div style={styles.rightCol}>
 
         {/* ============================================ */}
         {/* LOBBY / ROUND COMPLETE: Round Selection      */}
@@ -796,6 +801,8 @@ export function HostScreen() {
             </button>
           </div>
         </div>
+
+        </div> {/* end rightCol */}
       </div>
     </div>
   );
@@ -926,7 +933,10 @@ const styles: Record<string, React.CSSProperties> = {
   phaseBadge: { background: '#ffd70033', color: '#ffd700', padding: '2px 10px', borderRadius: '10px', fontSize: '0.7rem', fontWeight: 700, fontFamily: 'Montserrat', letterSpacing: '0.1em' },
   roundLabel: { fontSize: '0.85rem', fontWeight: 700, color: '#fff', fontFamily: 'Montserrat' },
   topRight: { display: 'flex', gap: '8px' },
-  content: { flex: 1, overflow: 'auto', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '12px' },
+  // Two-column layout: left column is pinned (wall preview always visible); right column scrolls.
+  content: { flex: 1, padding: '12px 16px', display: 'flex', flexDirection: 'row', gap: '14px', overflow: 'hidden', minHeight: 0 },
+  leftCol: { width: '42%', maxWidth: '680px', display: 'flex', flexDirection: 'column', gap: '12px', overflow: 'hidden', minHeight: 0 },
+  rightCol: { flex: 1, display: 'flex', flexDirection: 'column', gap: '12px', overflow: 'auto', minHeight: 0, paddingRight: '4px' },
   section: { background: '#12122a', border: '1px solid #222', borderRadius: '10px', padding: '12px' },
   sectionTitle: { fontSize: '0.8rem', fontWeight: 700, color: '#a0a0b0', fontFamily: 'Montserrat', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: '10px' },
   roundGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' },
