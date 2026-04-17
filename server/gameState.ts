@@ -4,7 +4,7 @@ import type {
   AuctionOffer, SongPart,
 } from '../shared/types.js';
 import { ROW_COLORS, WALL_INSTRUMENTS, ROUND_NAMES, formatMoney } from '../shared/types.js';
-import { getSongsForRound, getSongById, getPartsQuestion, roundPrizes, partsQuestions, anotherLevelBoard, anotherLevelSongs, AL_COL_INSTRUMENTS } from './data/songs.js';
+import { getSongsForRound, getSongById, getPartsQuestion, getPartsColumnSongs, roundPrizes, partsQuestions, partsColumnQuestions, anotherLevelBoard, anotherLevelSongs, AL_COL_INSTRUMENTS } from './data/songs.js';
 import type { AnotherLevelSongConfig } from './data/songs.js';
 import { INSTRUMENT_ICONS, INSTRUMENT_COLORS } from '../shared/types.js';
 
@@ -58,10 +58,14 @@ export interface GameState {
   partsTargetSong: Song | null;
   partsHerring1: Song | null;
   partsHerring2: Song | null;
-  partsSongsByRow: { row: number; song: Song }[]; // 3 entries (index 0 = target, 1-2 = decoys)
+  partsSongsByRow: { row: number; song: Song }[]; // legacy display; no longer drives gameplay
   // R4 scatter: each of the 15 cells plays a specific song's stem for that column's instrument.
-  // Scatter rule: per column, the 3 rows are assigned 3 different songIndexes (0/1/2 shuffled).
+  // Per column: 3 rows are assigned [target, decoy1, decoy2] shuffled — AND the target row
+  // of column N is guaranteed not to equal the target row of column N-1 (no adjacent cols stacked).
   partsScatter: { row: number; col: number; songIndex: 0 | 1 | 2 }[];
+  // NEW: each column has its OWN target + 2 decoys. songIndex 0 = this col's target,
+  // 1/2 = this col's decoys. Populated at loadSong from partsColumnQuestions.
+  partsColumnSongs: { col: number; target: Song; decoys: [Song, Song] }[];
   // R4 column-hunt mechanic (boss's design):
   // - play one cell at a time for 5s, advance row 1→2→3, loop at most twice per column
   // - buzz claims whichever cell is currently playing; correct = win col + $1k; wrong = player locked for col
@@ -114,6 +118,7 @@ export function createInitialState(): GameState {
     partsHerring2: null,
     partsSongsByRow: [],
     partsScatter: [],
+    partsColumnSongs: [],
     partsCurrentCol: -1,
     partsCurrentRow: 0,
     partsPassCount: 0,
@@ -233,13 +238,12 @@ function generatePartsWallMusicians(state: GameState): WallMusician[] {
   for (let row = 0; row < 3; row++) {
     for (let col = 0; col < 5; col++) {
       const slot = state.partsScatter.find(s => s.row === row + 1 && s.col === col);
-      const songEntry = slot ? state.partsSongsByRow[slot.songIndex] : undefined;
-      const song = songEntry?.song;
+      const song = slot ? partsCellSong(state, col, row + 1) : null;
 
-      // This cell's instrument is dictated by its column (Vocals=0 … Drums=4), not its song.
+      // This cell's instrument is dictated by its column (Vocals=0 … Drums=4).
       const instrumentName = PARTS_COL_INSTRUMENTS[col];
       const stem = song?.stems.find(s => getPartsCol(s.instrument) === col);
-      const nsId = stem && slot ? namespaceStemId(slot.songIndex + 1, stem.id) : -1;
+      const nsId = stem && slot ? partsCellStemId(col, row + 1) : -1;
 
       // Cell state flags
       const isCurrentlyPlaying = nsId > 0 && state.activeStems.includes(nsId);
@@ -253,7 +257,6 @@ function generatePartsWallMusicians(state: GameState): WallMusician[] {
       //   currently-playing cell → fully lit (brightest)
       //   won column, target row → lit with winner's color
       //   forfeited column, target row → lit (revealed)
-      //   current column, not currently playing → dim-on (in play area)
       //   everything else → dark
       let isActive: boolean;
       let color: string = ROW_COLORS[row][col];
@@ -263,8 +266,8 @@ function generatePartsWallMusicians(state: GameState): WallMusician[] {
       } else if (colWon && isTargetRow && winner) {
         isActive = true;
         color = playerColors[winner.player];
-      } else if ((colForfeited || revealing) && isTargetRow && isCurrentCol) {
-        isActive = true; // target revealed for forfeited current col
+      } else if ((colForfeited || (revealing && isCurrentCol)) && isTargetRow) {
+        isActive = true; // target revealed after forfeit (current or previously forfeited cols)
       } else {
         isActive = false;
       }
@@ -501,6 +504,14 @@ export function deriveHostState(state: GameState): HostState {
     partsLockedPlayers: state.roundType === 'song-in-5-parts' ? state.partsLockedPlayers : undefined,
     partsRevealing: state.roundType === 'song-in-5-parts' ? state.partsRevealing : undefined,
     partsScatter: state.roundType === 'song-in-5-parts' ? state.partsScatter : undefined,
+    partsColumnSongs: state.roundType === 'song-in-5-parts'
+      ? state.partsColumnSongs.map(c => ({
+          col: c.col,
+          targetTitle: c.target.title,
+          targetArtist: c.target.artist,
+          decoyTitles: [c.decoys[0].title, c.decoys[1].title] as [string, string],
+        }))
+      : undefined,
   };
 }
 
@@ -536,6 +547,7 @@ export function selectRound(state: GameState, round: RoundType): void {
   state.partsHerring2 = null;
   state.partsSongsByRow = [];
   state.partsScatter = [];
+  state.partsColumnSongs = [];
   partsClearTimer(state);
   state.partsCurrentCol = -1;
   state.partsCurrentRow = 0;
@@ -669,29 +681,25 @@ export function loadSong(state: GameState, index: number): void {
       break;
 
     case 'song-in-5-parts': {
-      state.currentPrize = roundPrizes['song-in-5-parts'][index] || 1000;
-      const question = getPartsQuestion(index);
-      if (question) {
-        const target = getSongById(question.targetSongId);
-        const herring1 = getSongById(question.herringSongIds[0]);
-        const herring2 = getSongById(question.herringSongIds[1]);
-        if (target && herring1 && herring2) {
-          state.partsTargetSong = target;
-          state.partsHerring1 = herring1;
-          state.partsHerring2 = herring2;
-          state.currentSong = target; // for display purposes
-          // CRITICAL: partsSongsByRow index 0 MUST be the target. The scatter logic uses
-          // songIndex (0/1/2) to pick which song each cell plays, where 0 = target.
-          // Randomising which row holds the target would misalign the scatter.
-          state.partsSongsByRow = [
-            { row: 1, song: target },    // songIndex 0 → target (the song players are hunting)
-            { row: 2, song: herring1 },  // songIndex 1 → decoy 1
-            { row: 3, song: herring2 },  // songIndex 2 → decoy 2
-          ];
-          state.partsTargetRow = 1; // informational only (HostScreen highlights target in song list)
-          state.songTitle = target.title;
-        }
-      }
+      // NEW model: each of 5 columns is its own mini-game with its own target + 2 decoys.
+      // Build partsColumnSongs from the 5-entry partsColumnQuestions config.
+      const colSongs = partsColumnQuestions
+        .map(q => {
+          const bundle = getPartsColumnSongs(q.col);
+          return bundle ? { col: q.col, target: bundle.target, decoys: bundle.decoys } : null;
+        })
+        .filter((x): x is { col: number; target: Song; decoys: [Song, Song] } => !!x);
+      state.partsColumnSongs = colSongs;
+      // Legacy: keep partsSongsByRow populated for the HostScreen's "songs in round" list.
+      // Use the 5 column targets so producers can see what players are hunting.
+      state.partsSongsByRow = colSongs.map((c, i) => ({ row: i + 1, song: c.target }));
+      state.partsTargetSong = colSongs[0]?.target ?? null;
+      state.partsHerring1 = null;
+      state.partsHerring2 = null;
+      state.currentSong = colSongs[0]?.target ?? null;
+      state.partsTargetRow = 0; // unused in new model (each col has its own target row)
+      state.songTitle = ''; // no single target to announce — each column has its own
+      state.currentPrize = 0;
       setupSongParts(state);
       state.phase = 'parts-intro';
       break;
@@ -861,6 +869,7 @@ export function backToLobby(state: GameState): void {
   state.partsHerring2 = null;
   state.partsSongsByRow = [];
   state.partsScatter = [];
+  state.partsColumnSongs = [];
   partsClearTimer(state);
   state.partsCurrentCol = -1;
   state.partsCurrentRow = 0;
@@ -1069,15 +1078,25 @@ export function namespaceStemId(row: number, stemId: number): number {
   return row * 100 + stemId;
 }
 
-// Build the scattered wall for R4: for each of 5 columns, shuffle which row plays which song.
-// Guarantees each song appears exactly once per column (no duplicate stems in the audio engine).
+// Build the scattered wall for R4 under the new per-column-target model.
+// songIndex 0 = this column's target, 1/2 = this column's decoys.
+// Constraint: no two adjacent columns can have the target on the same row (keeps the
+// wall from showing the target "middle-middle-middle" runs the producer complained about).
 function buildPartsScatter(): { row: number; col: number; songIndex: 0 | 1 | 2 }[] {
+  // Pick target row per column with no-adjacent-match rule
+  const targetRows: number[] = [];
+  for (let col = 0; col < 5; col++) {
+    const banned = col === 0 ? new Set<number>() : new Set([targetRows[col - 1]]);
+    const options = [1, 2, 3].filter(r => !banned.has(r));
+    targetRows.push(options[Math.floor(Math.random() * options.length)]);
+  }
   const entries: { row: number; col: number; songIndex: 0 | 1 | 2 }[] = [];
   for (let col = 0; col < 5; col++) {
-    const order = shuffled([0, 1, 2]) as (0 | 1 | 2)[];
-    for (let row = 1; row <= 3; row++) {
-      entries.push({ row, col, songIndex: order[row - 1] });
-    }
+    const targetRow = targetRows[col];
+    const decoyRows = shuffled([1, 2, 3].filter(r => r !== targetRow));
+    entries.push({ row: targetRow, col, songIndex: 0 }); // target
+    entries.push({ row: decoyRows[0], col, songIndex: 1 }); // decoy 1
+    entries.push({ row: decoyRows[1], col, songIndex: 2 }); // decoy 2
   }
   return entries;
 }
@@ -1187,16 +1206,31 @@ export function partsClearTimer(state: GameState): void {
   }
 }
 
-// Given a column index (0-4) and row (1-3), find the stem ID that cell plays.
-// Returns null if scatter/songs aren't ready.
-function partsCellStemId(state: GameState, col: number, row: number): number | null {
+// Look up the song object a given cell represents, based on its column's target/decoys.
+export function partsCellSong(state: GameState, col: number, row: number): Song | null {
   const slot = state.partsScatter.find(s => s.col === col && s.row === row);
   if (!slot) return null;
-  const song = state.partsSongsByRow[slot.songIndex]?.song;
+  const colBundle = state.partsColumnSongs.find(c => c.col === col);
+  if (!colBundle) return null;
+  if (slot.songIndex === 0) return colBundle.target;
+  if (slot.songIndex === 1) return colBundle.decoys[0];
+  if (slot.songIndex === 2) return colBundle.decoys[1];
+  return null;
+}
+
+// Each cell gets a unique audio stem ID: (col+1)*100 + row gives 101..503 with no collisions.
+// Used by the audio engine's Map<id, StemAudio> so each of the 15 cells plays its own track.
+export function partsCellStemId(col: number, row: number): number {
+  return namespaceStemId(col + 1, row);
+}
+
+// Given a (col, row), find the stem ID — returns null if the cell has no song/stem.
+function partsCellStemIdIfReady(state: GameState, col: number, row: number): number | null {
+  const song = partsCellSong(state, col, row);
   if (!song) return null;
   const stem = song.stems.find(s => getPartsCol(s.instrument) === col);
   if (!stem) return null;
-  return namespaceStemId(slot.songIndex + 1, stem.id);
+  return partsCellStemId(col, row);
 }
 
 // Returns the row containing the target (songIndex 0) for a given column.
@@ -1223,7 +1257,7 @@ export function partsStartColumn(state: GameState, col: number): number | null {
   state.phase = 'parts-playing';
   state.isAudioPlaying = true;
 
-  const stemId = partsCellStemId(state, col, 1);
+  const stemId = partsCellStemIdIfReady(state, col, 1);
   if (stemId != null) state.activeStems = [stemId];
   return stemId;
 }
@@ -1254,7 +1288,7 @@ export function partsTickCell(state: GameState): { fadeOut: number[]; fadeIn: nu
   state.partsCurrentRow = nextRow;
   state.partsPassCount = passCount;
 
-  const nextStemId = partsCellStemId(state, state.partsCurrentCol, nextRow);
+  const nextStemId = partsCellStemIdIfReady(state, state.partsCurrentCol, nextRow);
   state.activeStems = nextStemId != null ? [nextStemId] : [];
   return { fadeOut, fadeIn: nextStemId != null ? [nextStemId] : [], forfeit: false };
 }
@@ -1325,7 +1359,7 @@ export function partsRevealForfeit(state: GameState): number | null {
   state.isAudioPlaying = true;
   // Play the target stem so players hear what the correct answer was
   const targetRow = partsTargetRowForCol(state, col);
-  const targetStemId = partsCellStemId(state, col, targetRow);
+  const targetStemId = partsCellStemIdIfReady(state, col, targetRow);
   state.activeStems = targetStemId != null ? [targetStemId] : [];
   state.buzzedPlayer = null;
   state.visualEffect = 'reveal';

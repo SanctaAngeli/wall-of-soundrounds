@@ -271,6 +271,13 @@ export function WallScreen() {
               boxShadow: isRevealPhase ? '0 0 60px #ffd70060' : 'none',
               animation: isRevealPhase ? 'scale-in 0.4s ease-out' : 'none',
             }}>
+              {(() => {
+                // Map bid (musician count) to prize via the standard ladder: 1→15k, 2→6k, 3→3k, 4→2k, 5→1k
+                const PRIZE_LADDER = [15000, 6000, 3000, 2000, 1000];
+                const p1Prize = PRIZE_LADDER[(auctionBids.player1 ?? 1) - 1] ?? 0;
+                const p2Prize = PRIZE_LADDER[(auctionBids.player2 ?? 1) - 1] ?? 0;
+                return (
+                  <>
               <div style={{ textAlign: 'center' }}>
                 <div style={{
                   fontSize: isRevealPhase ? '1rem' : '0.7rem',
@@ -278,12 +285,12 @@ export function WallScreen() {
                   letterSpacing: '0.1em', textTransform: 'uppercase',
                 }}>{players[1].name}</div>
                 <div style={{
-                  fontSize: isRevealPhase ? 'clamp(3rem, 7vw, 5rem)' : '1.5rem',
+                  fontSize: isRevealPhase ? 'clamp(2.4rem, 5.5vw, 4rem)' : '1.3rem',
                   fontWeight: 900, fontFamily: 'Montserrat',
                   color: auctionWinner === 1 || auctionWinner === 'tied' ? '#00ff88' : '#666',
                   textShadow: isRevealPhase && (auctionWinner === 1 || auctionWinner === 'tied') ? '0 0 30px #00ff8880' : 'none',
                 }}>
-                  {auctionBids.player1}
+                  ${p1Prize.toLocaleString()}
                 </div>
                 {isRevealPhase && auctionWinner === 1 && (
                   <div style={{ fontSize: '0.85rem', color: '#00ff88', fontWeight: 900, letterSpacing: '0.15em', marginTop: '6px' }}>
@@ -299,12 +306,12 @@ export function WallScreen() {
                   letterSpacing: '0.1em', textTransform: 'uppercase',
                 }}>{players[2].name}</div>
                 <div style={{
-                  fontSize: isRevealPhase ? 'clamp(3rem, 7vw, 5rem)' : '1.5rem',
+                  fontSize: isRevealPhase ? 'clamp(2.4rem, 5.5vw, 4rem)' : '1.3rem',
                   fontWeight: 900, fontFamily: 'Montserrat',
                   color: auctionWinner === 2 || auctionWinner === 'tied' ? '#00ff88' : '#666',
                   textShadow: isRevealPhase && (auctionWinner === 2 || auctionWinner === 'tied') ? '0 0 30px #00ff8880' : 'none',
                 }}>
-                  {auctionBids.player2}
+                  ${p2Prize.toLocaleString()}
                 </div>
                 {isRevealPhase && auctionWinner === 2 && (
                   <div style={{ fontSize: '0.85rem', color: '#00ff88', fontWeight: 900, letterSpacing: '0.15em', marginTop: '6px' }}>
@@ -317,6 +324,9 @@ export function WallScreen() {
                   TIE!
                 </div>
               )}
+                  </>
+                );
+              })()}
             </div>
           );
         })()}

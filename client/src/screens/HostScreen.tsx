@@ -512,8 +512,8 @@ export function HostScreen() {
                       )}
 
                       {/* Host-only cell-song map: which song lives in each (row, col) scatter slot.
-                          Target (songIndex=0) = GOLD, decoys = dim. Current cell is boxed. */}
-                      {hostState.partsScatter && partsSongs && partsSongs.length === 3 && (
+                          Per-column model: each col has its own target (gold) + 2 decoys (dim). */}
+                      {hostState.partsScatter && hostState.partsColumnSongs && hostState.partsColumnSongs.length > 0 && (
                         <div style={{ marginBottom: '10px' }}>
                           <div style={{ fontSize: '0.65rem', color: '#a0a0b0', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '4px' }}>
                             Scatter (your eyes only)
@@ -521,7 +521,13 @@ export function HostScreen() {
                           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '3px' }}>
                             {[1, 2, 3].map(row => colNames.map((_, col) => {
                               const slot = hostState.partsScatter?.find(s => s.row === row && s.col === col);
-                              const songTitle = slot ? partsSongs[slot.songIndex]?.title ?? '?' : '?';
+                              const bundle = hostState.partsColumnSongs?.find(c => c.col === col);
+                              let songTitle = '?';
+                              if (slot && bundle) {
+                                songTitle = slot.songIndex === 0 ? bundle.targetTitle
+                                          : slot.songIndex === 1 ? bundle.decoyTitles[0]
+                                          : bundle.decoyTitles[1];
+                              }
                               const isTarget = slot?.songIndex === 0;
                               const isCurrent = col === currCol && row === currRow && !colResolved;
                               return (
@@ -534,7 +540,7 @@ export function HostScreen() {
                                   color: isTarget ? '#ffd700' : '#a0a0b0',
                                   textAlign: 'center',
                                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                                }} title={`${colNames[col]} · Row ${row} · ${songTitle}`}>
+                                }} title={`${colNames[col]} · Row ${row} · ${songTitle}${isTarget ? ' (TARGET)' : ''}`}>
                                   {songTitle.slice(0, 12)}
                                 </div>
                               );
@@ -543,51 +549,75 @@ export function HostScreen() {
                         </div>
                       )}
 
-                      {/* Primary action button(s) */}
-                      {!roundOver && (
+                      {/* Primary action button(s) — new model: pick any unplayed column */}
+                      {!roundOver && (notStarted || colResolved) && (
+                        <>
+                          <div style={{ fontSize: '0.7rem', color: '#a0a0b0', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '6px' }}>
+                            {notStarted ? 'Pick a column to start' : 'Pick next column'}
+                          </div>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '6px' }}>
+                            {colNames.map((name, col) => {
+                              const winner = winners[col];
+                              const forfeit = forfeits[col];
+                              const done = !!winner || forfeit;
+                              const prize = ([1000, 2000, 3000, 4000, 5000])[col];
+                              const colBundle = hostState.partsColumnSongs?.find(c => c.col === col);
+                              return (
+                                <button
+                                  key={col}
+                                  onClick={() => !done && emit('host:parts-start-column', { col })}
+                                  disabled={done}
+                                  title={colBundle ? `Target: ${colBundle.targetTitle}` : undefined}
+                                  style={{
+                                    ...styles.controlBtn,
+                                    background: done ? '#2a2a3a' : '#ffd700',
+                                    color: done ? '#606080' : '#000',
+                                    opacity: done ? 0.5 : 1,
+                                    flexDirection: 'column',
+                                    gap: '2px',
+                                    padding: '10px 4px',
+                                    cursor: done ? 'not-allowed' : 'pointer',
+                                    fontSize: '0.75rem',
+                                    fontWeight: 900,
+                                  }}
+                                >
+                                  <span>{name}</span>
+                                  <span style={{ fontSize: '0.65rem', opacity: 0.85 }}>${prize / 1000}k</span>
+                                  {done && <span style={{ fontSize: '0.55rem' }}>{winner ? `P${winner.player}` : '✗'}</span>}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </>
+                      )}
+
+                      {/* During a column: Next stem + reveal target */}
+                      {!roundOver && !notStarted && !colResolved && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                          {notStarted ? (
-                            <button
-                              onClick={() => emit('host:parts-start-column', { col: 0 })}
-                              style={{ ...styles.controlBtn, background: '#ffd700', color: '#000', width: '100%', fontWeight: 900 }}
-                            >
-                              START COLUMN 1 ({colNames[0].toUpperCase()})
-                            </button>
-                          ) : colResolved ? (
-                            <button
-                              onClick={() => emit('host:parts-next-column')}
-                              style={{ ...styles.controlBtn, background: '#00d4ff', color: '#000', width: '100%', fontWeight: 900 }}
-                            >
-                              {currCol >= 4 ? 'FINISH ROUND' : `→ COLUMN ${currCol + 2} (${colNames[currCol + 1]?.toUpperCase() ?? ''})`}
-                            </button>
-                          ) : (
-                            <>
-                              <button
-                                onClick={() => emit('host:parts-next-stem')}
-                                disabled={buzzedPlayer != null}
-                                style={{
-                                  ...styles.controlBtn,
-                                  background: buzzedPlayer != null ? '#333' : '#ffd700',
-                                  color: buzzedPlayer != null ? '#666' : '#000',
-                                  opacity: buzzedPlayer != null ? 0.5 : 1,
-                                  width: '100%', fontWeight: 900, padding: '14px',
-                                }}
-                              >
-                                ▶ NEXT STEM (row {currRow} → {currRow === 3 ? 1 : currRow + 1})
-                              </button>
-                              <button
-                                onClick={() => emit('host:parts-reveal')}
-                                style={{ ...styles.controlBtn, background: '#666', color: '#fff', width: '100%' }}
-                              >
-                                REVEAL TARGET (end this column)
-                              </button>
-                            </>
-                          )}
+                          <button
+                            onClick={() => emit('host:parts-next-stem')}
+                            disabled={buzzedPlayer != null}
+                            style={{
+                              ...styles.controlBtn,
+                              background: buzzedPlayer != null ? '#333' : '#ffd700',
+                              color: buzzedPlayer != null ? '#666' : '#000',
+                              opacity: buzzedPlayer != null ? 0.5 : 1,
+                              width: '100%', fontWeight: 900, padding: '14px',
+                            }}
+                          >
+                            ▶ NEXT STEM (row {currRow} → {currRow === 3 ? 1 : currRow + 1})
+                          </button>
+                          <button
+                            onClick={() => emit('host:parts-reveal')}
+                            style={{ ...styles.controlBtn, background: '#666', color: '#fff', width: '100%' }}
+                          >
+                            REVEAL TARGET (end this column)
+                          </button>
                         </div>
                       )}
 
                       <div style={{ fontSize: '0.65rem', color: '#606080', marginTop: '6px', fontStyle: 'italic' }}>
-                        Host controls pacing: press NEXT STEM when ready. Buzz claims whichever cell is currently playing. Wrong = player locked for this column. After 2 full passes NEXT STEM auto-reveals.
+                        Each column is its own hunt for a different song. Pick any unplayed column. $1k/$2k/$3k/$4k/$5k per column.
                       </div>
                     </>
                   );

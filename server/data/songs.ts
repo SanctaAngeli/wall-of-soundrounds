@@ -401,7 +401,7 @@ export const roundPrizes: Record<RoundType, number[]> = {
   '5to1': [1000, 2000, 3000, 4000, 5000],
   'another-level': [1000, 2000, 6000],
   'music-auction': [15000, 6000, 3000, 2000, 1000], // Based on musician count chosen
-  'song-in-5-parts': [1000, 1000, 1000, 1000, 1000], // $1k per column, $5k round max
+  'song-in-5-parts': [1000, 2000, 3000, 4000, 5000], // col 1 → col 5; total possible $15k
 };
 
 // Song in 5 Parts: 5 questions, each with a target song + 2 herring songs
@@ -410,20 +410,44 @@ export interface PartsQuestion {
   herringSongIds: [string, string];
 }
 
-// Every song referenced below MUST have all 5 primary stems (Drums/Bass/Keys/Guitar/Vocals)
-// or R4 will render silent cells in that song's column slot on the scatter.
-// (Piano counts as Keys via getPartsCol.)
-// Each question is a loosely-themed trio; target is what players are trying to identify.
-export const partsQuestions: PartsQuestion[] = [
-  { targetSongId: 'thescientist',           herringSongIds: ['mad-world', 'house-of-the-rising-sun'] }, // moody
-  { targetSongId: 'break-my-heart',         herringSongIds: ['oops-i-did-it-again', 'last-friday-night'] }, // pop
-  { targetSongId: 'zombie',                 herringSongIds: ['white-wedding', 'wild-horses'] }, // rock
-  { targetSongId: 'love-story',             herringSongIds: ['cruise', 'cowboy-take-me-home'] }, // country
-  { targetSongId: 'we-didnt-start-the-fire', herringSongIds: ['maniac', 'magic'] }, // 80s
+// Every song referenced below MUST have all 5 primary stems (D/B/K/G/V).
+// NEW R4 model: each COLUMN is its own mini-game with its own target song + 2 decoys.
+// 5 columns × (1 target + 2 decoys) = 15 cells. Each column tests a single instrument:
+//   col 0 = Vocals, col 1 = Guitar, col 2 = Keys, col 3 = Bass, col 4 = Drums.
+export interface PartsColumnQuestion {
+  col: 0 | 1 | 2 | 3 | 4;
+  targetSongId: string;
+  decoySongIds: [string, string];
+}
+
+export const partsColumnQuestions: PartsColumnQuestion[] = [
+  { col: 0, targetSongId: 'thescientist',           decoySongIds: ['mad-world', 'house-of-the-rising-sun'] },             // Vocals
+  { col: 1, targetSongId: 'zombie',                 decoySongIds: ['white-wedding', 'wild-horses'] },                     // Guitar
+  { col: 2, targetSongId: 'break-my-heart',         decoySongIds: ['oops-i-did-it-again', 'last-friday-night'] },         // Keys
+  { col: 3, targetSongId: 'love-story',             decoySongIds: ['cruise', 'cowboy-take-me-home'] },                    // Bass
+  { col: 4, targetSongId: 'we-didnt-start-the-fire', decoySongIds: ['maniac', 'magic'] },                                  // Drums
 ];
+
+// Legacy question list kept for any old code paths that still reference it.
+// Mirror the new model: one question per column, target = column target.
+export const partsQuestions: PartsQuestion[] = partsColumnQuestions.map(q => ({
+  targetSongId: q.targetSongId,
+  herringSongIds: q.decoySongIds,
+}));
 
 export function getPartsQuestion(index: number): PartsQuestion | undefined {
   return partsQuestions[index];
+}
+
+// Resolve a column's target + decoys as Song objects.
+export function getPartsColumnSongs(col: number): { target: Song; decoys: [Song, Song] } | null {
+  const q = partsColumnQuestions.find(x => x.col === col);
+  if (!q) return null;
+  const target = getSongById(q.targetSongId);
+  const d1 = getSongById(q.decoySongIds[0]);
+  const d2 = getSongById(q.decoySongIds[1]);
+  if (!target || !d1 || !d2) return null;
+  return { target, decoys: [d1, d2] };
 }
 
 // ============================================
@@ -460,11 +484,11 @@ export const anotherLevelBoard: AnotherLevelCell[] = [
   { row: 2, col: 3, prize: 2000, color: '#ff69b4', group: 'pink' },
   { row: 2, col: 4, prize: 2000, color: '#ff69b4', group: 'pink' },
   { row: 2, col: 5, prize: 4000, color: '#00c853', group: 'green' },
-  // Row 3 (bottom): Lion Sleeps Tonight(2 yellow) + decorative(2 blue) + decorative(1 peach)
+  // Row 3 (bottom — easiest, all $1k to start from)
   { row: 3, col: 1, prize: 1000, color: '#ffd700', group: 'yellow' },
   { row: 3, col: 2, prize: 1000, color: '#ffd700', group: 'yellow' },
-  { row: 3, col: 3, prize: 2000, color: '#4fc3f7', group: 'blue' },
-  { row: 3, col: 4, prize: 2000, color: '#4fc3f7', group: 'blue' },
+  { row: 3, col: 3, prize: 1000, color: '#4fc3f7', group: 'blue' },
+  { row: 3, col: 4, prize: 1000, color: '#4fc3f7', group: 'blue' },
   { row: 3, col: 5, prize: 1000, color: '#ffab91', group: 'peach' },
 ];
 

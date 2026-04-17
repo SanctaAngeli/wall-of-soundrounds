@@ -65,25 +65,41 @@ function sendAudioCommand(io: Server, command: AudioCommand) {
   io.emit('wall:audio', command);
 }
 
-// Send load-multi command for Song in 5 Parts (3 songs — namespaced by songIndex+1).
-// Note: the `row` field on the wire is actually the namespace slot (= songIndex + 1),
-// kept named `row` to avoid an AudioCommand type change. The audio engine treats it as opaque.
+// Send load-multi command for Song in 5 Parts — NEW per-column-target model.
+// Emits 15 cell-stems (5 cols × 3 rows), each with a unique ID = (col+1)*100 + row.
+// Each cell is its own one-stem "song" entry so load-multi can download per-cell audio.
 function sendPartsLoadCommand(io: Server, state: GameState) {
-  if (state.partsSongsByRow.length === 0) return;
+  if (state.partsColumnSongs.length === 0 || state.partsScatter.length === 0) return;
 
-  const songs = state.partsSongsByRow.map((entry, songIndex) => {
-    const slot = songIndex + 1; // 1,2,3 — just an encoding for unique stem IDs
-    return {
-      songId: entry.song.id,
-      stems: entry.song.stems.map(s => ({
-        ...s,
-        id: namespaceStemId(slot, s.id),
-      })),
-      row: slot,
-    };
-  });
+  type LoadEntry = { songId: string; stems: any[]; row: number };
+  const entries: LoadEntry[] = [];
 
-  sendAudioCommand(io, { action: 'load-multi', songs });
+  for (const slot of state.partsScatter) {
+    // Look up this cell's song from the column's target/decoy bundle
+    const colBundle = state.partsColumnSongs.find(c => c.col === slot.col);
+    if (!colBundle) continue;
+    const song = slot.songIndex === 0 ? colBundle.target
+               : slot.songIndex === 1 ? colBundle.decoys[0]
+               : colBundle.decoys[1];
+    // The cell plays its column's instrument (Vocals=col0 … Drums=col4)
+    const stem = song.stems.find(s => {
+      const i = s.instrument.toLowerCase();
+      if (slot.col === 0) return i.includes('vocal');
+      if (slot.col === 1) return i.includes('guitar');
+      if (slot.col === 2) return i.includes('key') || i.includes('piano');
+      if (slot.col === 3) return i.includes('bass') && !i.includes('vocal');
+      if (slot.col === 4) return i.includes('drum');
+      return false;
+    });
+    if (!stem) continue;
+    entries.push({
+      songId: song.id,
+      stems: [{ ...stem, id: namespaceStemId(slot.col + 1, slot.row) }],
+      row: slot.col + 1,
+    });
+  }
+
+  sendAudioCommand(io, { action: 'load-multi', songs: entries });
 }
 
 export function setupSocketHandlers(io: Server, state: GameState) {

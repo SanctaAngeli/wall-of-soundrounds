@@ -199,6 +199,8 @@ export interface HostState {
   partsRevealing?: boolean;
   // Full scatter for host display — which song (0=target, 1-2=decoys) is on each cell
   partsScatter?: { row: number; col: number; songIndex: 0 | 1 | 2 }[];
+  // Per-column target + decoys (host-only info; shown in column picker)
+  partsColumnSongs?: { col: number; targetTitle: string; targetArtist: string; decoyTitles: [string, string] }[];
 }
 
 // ============================================
