@@ -11,6 +11,7 @@ import {
   addMusician,
   setStem,
   revealAll,
+  revealSong,
   playerBuzz,
   markCorrect,
   markWrong,
@@ -25,9 +26,16 @@ import {
   auctionStartBidding,
   auctionPlayerBid,
   auctionRevealBids,
+  auctionStartMusic,
   auctionClearTimer,
   partsNext,
   partsPlayCurrent,
+  anotherLevelSelectGroup,
+  anotherLevelBackToBoard,
+  partsStartColumn,
+  partsTickCell,
+  partsRevealForfeit,
+  partsClearTimer,
 } from './gameState.js';
 
 // Track which sockets belong to which role
@@ -57,18 +65,23 @@ function sendAudioCommand(io: Server, command: AudioCommand) {
   io.emit('wall:audio', command);
 }
 
-// Send load-multi command for Song in 5 Parts (3 songs, one per row)
+// Send load-multi command for Song in 5 Parts (3 songs — namespaced by songIndex+1).
+// Note: the `row` field on the wire is actually the namespace slot (= songIndex + 1),
+// kept named `row` to avoid an AudioCommand type change. The audio engine treats it as opaque.
 function sendPartsLoadCommand(io: Server, state: GameState) {
   if (state.partsSongsByRow.length === 0) return;
 
-  const songs = state.partsSongsByRow.map(entry => ({
-    songId: entry.song.id,
-    stems: entry.song.stems.map(s => ({
-      ...s,
-      id: namespaceStemId(entry.row, s.id), // namespace the IDs
-    })),
-    row: entry.row,
-  }));
+  const songs = state.partsSongsByRow.map((entry, songIndex) => {
+    const slot = songIndex + 1; // 1,2,3 — just an encoding for unique stem IDs
+    return {
+      songId: entry.song.id,
+      stems: entry.song.stems.map(s => ({
+        ...s,
+        id: namespaceStemId(slot, s.id),
+      })),
+      row: slot,
+    };
+  });
 
   sendAudioCommand(io, { action: 'load-multi', songs });
 }
@@ -127,6 +140,15 @@ export function setupSocketHandlers(io: Server, state: GameState) {
     // HOST EVENTS
     // ============================================
 
+    // Helper: for R3 (music-auction) load BOTH primary + extra stems so horns/BVs/LVs actually
+    // produce audio when they appear in auction offers. Other rounds use primary stems only.
+    const stemsForRound = () => {
+      if (!state.currentSong) return [];
+      return state.roundType === 'music-auction'
+        ? [...state.currentSong.stems, ...(state.currentSong.extraStems ?? [])]
+        : state.currentSong.stems;
+    };
+
     socket.on('host:select-round', (data: { round: RoundType }) => {
       // Stop any audio from the previous round
       sendAudioCommand(io, { action: 'stop' });
@@ -138,7 +160,7 @@ export function setupSocketHandlers(io: Server, state: GameState) {
         sendAudioCommand(io, {
           action: 'load',
           songId: state.currentSong.id,
-          stems: state.currentSong.stems,
+          stems: stemsForRound(),
         });
       }
       broadcastState(io, state);
@@ -152,7 +174,7 @@ export function setupSocketHandlers(io: Server, state: GameState) {
         sendAudioCommand(io, {
           action: 'load',
           songId: state.currentSong.id,
-          stems: state.currentSong.stems,
+          stems: stemsForRound(),
         });
       }
       broadcastState(io, state);
@@ -170,11 +192,10 @@ export function setupSocketHandlers(io: Server, state: GameState) {
       state.buzzedPlayer = null;
       state.visualEffect = 'none';
       sendAudioCommand(io, { action: 'play' });
-      // For Another Level, make sure pre-set stems are audible
-      if (state.roundType === 'another-level') {
-        for (const stemId of state.activeStems) {
-          sendAudioCommand(io, { action: 'fade-in-stem', stemId, duration: 100 });
-        }
+      // Stems load at gain=0 (muted). Any round that pre-activates stems at loadSong/select
+      // time (R1 5to1, R2 another-level) must fade them in explicitly on play, else silence.
+      for (const stemId of state.activeStems) {
+        sendAudioCommand(io, { action: 'fade-in-stem', stemId, duration: 100 });
       }
       broadcastState(io, state);
     });
@@ -215,6 +236,11 @@ export function setupSocketHandlers(io: Server, state: GameState) {
       broadcastState(io, state);
     });
 
+    socket.on('host:reveal-song', () => {
+      revealSong(state);
+      broadcastState(io, state);
+    });
+
     socket.on('host:reveal-all', () => {
       const newStems = revealAll(state);
       if (newStems.length > 0) {
@@ -225,11 +251,23 @@ export function setupSocketHandlers(io: Server, state: GameState) {
 
     socket.on('host:mark-correct', () => {
       markCorrect(state);
+      // R4: column won — audio stays paused. Host presses "Next Column" to advance.
+      if (state.roundType === 'song-in-5-parts') {
+        sendAudioCommand(io, { action: 'pause' });
+      }
       broadcastState(io, state);
     });
 
     socket.on('host:mark-wrong', () => {
       markWrong(state);
+      // R4: buzzer was locked; resume the same cell at full gain (host advances manually)
+      if (state.roundType === 'song-in-5-parts' && state.phase === 'parts-playing') {
+        sendAudioCommand(io, { action: 'play' });
+        const stemId = state.activeStems[0];
+        if (stemId != null) {
+          sendAudioCommand(io, { action: 'fade-in-stem', stemId, duration: 200 });
+        }
+      }
       broadcastState(io, state);
     });
 
@@ -300,6 +338,35 @@ export function setupSocketHandlers(io: Server, state: GameState) {
     });
 
     // ============================================
+    // ANOTHER LEVEL EVENTS
+    // ============================================
+
+    socket.on('host:al-select-group', (data: { group: string }) => {
+      const { stemIds } = anotherLevelSelectGroup(state, data.group);
+      if (state.currentSong) {
+        // Load the song's audio, then fade in just the picked group's stems.
+        sendAudioCommand(io, {
+          action: 'load',
+          songId: state.currentSong.id,
+          stems: state.currentSong.stems,
+        });
+        setTimeout(() => {
+          for (const stemId of stemIds) {
+            sendAudioCommand(io, { action: 'fade-in-stem', stemId, duration: 100 });
+          }
+          broadcastState(io, state);
+        }, 300);
+      }
+      broadcastState(io, state);
+    });
+
+    socket.on('host:al-back-to-board', () => {
+      sendAudioCommand(io, { action: 'stop' });
+      anotherLevelBackToBoard(state);
+      broadcastState(io, state);
+    });
+
+    // ============================================
     // MUSIC AUCTION EVENTS
     // ============================================
 
@@ -319,39 +386,39 @@ export function setupSocketHandlers(io: Server, state: GameState) {
     });
 
     socket.on('host:auction-reveal-bids', () => {
-      const { winner, musicianCount } = auctionRevealBids(state);
-
-      // Load audio with the right stems
+      auctionRevealBids(state);
+      // Preload audio so the next step (host:auction-start-music) can play immediately,
+      // but DON'T start playback yet. Host gets a clear beat to present the bids + winner
+      // before pressing PLAY MUSIC.
       if (state.currentSong) {
         sendAudioCommand(io, {
           action: 'load',
           songId: state.currentSong.id,
-          stems: state.currentSong.stems,
+          stems: stemsForRound(),
         });
-        // After loading, fade in the active stems and start playing
-        setTimeout(() => {
-          for (const stemId of state.activeStems) {
-            sendAudioCommand(io, { action: 'fade-in-stem', stemId, duration: 100 });
-          }
-          state.isAudioPlaying = true;
-          sendAudioCommand(io, { action: 'play' });
+      }
+      broadcastState(io, state);
+    });
 
-          // Start 30-second timer for solo winner (not tied)
-          if (winner !== 'tied') {
-            state.auctionTimerValue = 30;
-            state.auctionTimerInterval = setInterval(() => {
-              if (state.auctionTimerValue !== null && state.auctionTimerValue > 0) {
-                state.auctionTimerValue--;
-                broadcastState(io, state);
-              } else {
-                auctionClearTimer(state);
-                broadcastState(io, state);
-              }
-            }, 1000);
-          }
+    socket.on('host:auction-start-music', () => {
+      const stems = auctionStartMusic(state);
+      for (const stemId of stems) {
+        sendAudioCommand(io, { action: 'fade-in-stem', stemId, duration: 200 });
+      }
+      sendAudioCommand(io, { action: 'play' });
 
-          broadcastState(io, state);
-        }, 500);
+      // Start 30-second buzz timer for solo winners (tied pairs race without a timer cap)
+      if (state.auctionWinner !== 'tied') {
+        state.auctionTimerValue = 30;
+        state.auctionTimerInterval = setInterval(() => {
+          if (state.auctionTimerValue !== null && state.auctionTimerValue > 0) {
+            state.auctionTimerValue--;
+            broadcastState(io, state);
+          } else {
+            auctionClearTimer(state);
+            broadcastState(io, state);
+          }
+        }, 1000);
       }
       broadcastState(io, state);
     });
@@ -359,6 +426,66 @@ export function setupSocketHandlers(io: Server, state: GameState) {
     // ============================================
     // SONG IN 5 PARTS EVENTS
     // ============================================
+
+    // ============================================
+    // SONG IN 5 PARTS v2 — column-hunt mechanic
+    // ============================================
+
+    // R4 uses manual cell advancement — host presses "NEXT STEM" to move on.
+    // No server-side auto-timer; host controls pacing to handle dead-air stems etc.
+    const PARTS_FADE_MS = 150;
+
+    socket.on('host:parts-start-column', (data: { col: number }) => {
+      // Silence everything first so no stem from a previous column bleeds into this one.
+      sendAudioCommand(io, { action: 'fade-all-out', duration: PARTS_FADE_MS });
+      const stemId = partsStartColumn(state, data.col);
+      if (stemId != null) sendAudioCommand(io, { action: 'fade-in-stem', stemId, duration: 300 });
+      sendAudioCommand(io, { action: 'play' });
+      broadcastState(io, state);
+    });
+
+    socket.on('host:parts-next-stem', () => {
+      const { fadeOut, fadeIn, forfeit } = partsTickCell(state);
+      for (const id of fadeOut) sendAudioCommand(io, { action: 'fade-out-stem', stemId: id, duration: PARTS_FADE_MS });
+      for (const id of fadeIn) sendAudioCommand(io, { action: 'fade-in-stem', stemId: id, duration: PARTS_FADE_MS });
+      if (forfeit) {
+        // After 2 manual passes, force a reveal if host keeps advancing without judgment
+        sendAudioCommand(io, { action: 'fade-all-out', duration: 200 });
+        const targetStemId = partsRevealForfeit(state);
+        if (targetStemId != null) sendAudioCommand(io, { action: 'fade-in-stem', stemId: targetStemId, duration: 400 });
+      }
+      broadcastState(io, state);
+    });
+
+    socket.on('host:parts-next-column', () => {
+      const current = state.partsCurrentCol;
+      const nextCol = current + 1;
+      partsClearTimer(state);
+      // Hard-mute all stems before moving on — otherwise stems from the column we just left
+      // keep sounding (their gain was never reset) and overlap the next column's cell.
+      sendAudioCommand(io, { action: 'fade-all-out', duration: 200 });
+      if (nextCol >= 5) {
+        sendAudioCommand(io, { action: 'pause' });
+        state.phase = 'round-complete';
+        state.activeStems = [];
+        state.isAudioPlaying = false;
+      } else {
+        const stemId = partsStartColumn(state, nextCol);
+        if (stemId != null) sendAudioCommand(io, { action: 'fade-in-stem', stemId, duration: 300 });
+        sendAudioCommand(io, { action: 'play' });
+      }
+      broadcastState(io, state);
+    });
+
+    socket.on('host:parts-reveal', () => {
+      // Manually reveal the target cell (host calls this to end a column early, e.g. give up)
+      partsClearTimer(state);
+      // Drop everything that's ringing, then solo the target stem
+      sendAudioCommand(io, { action: 'fade-all-out', duration: 200 });
+      const targetStemId = partsRevealForfeit(state);
+      if (targetStemId != null) sendAudioCommand(io, { action: 'fade-in-stem', stemId: targetStemId, duration: 400 });
+      broadcastState(io, state);
+    });
 
     socket.on('host:parts-next', () => {
       const { fadeOut, fadeIn } = partsNext(state);

@@ -44,7 +44,7 @@ export function WallScreen() {
   }
 
   const { phase, roundName, songNumber, totalSongs, musicians, currentPrize,
-    players, buzzedPlayer, visualEffect, songTitle, message,
+    players, buzzedPlayer, visualEffect, songTitle, revealText, message,
     auctionBids, auctionWinner, auctionTimer, genre } = wallState;
 
   return (
@@ -85,9 +85,45 @@ export function WallScreen() {
       )}
 
       {/* Song title for rounds that show it upfront */}
-      {songTitle && (phase === 'playing' || phase === 'parts-intro' || phase === 'parts-playing') && (
+      {songTitle && !revealText && (phase === 'playing' || phase === 'parts-intro' || phase === 'parts-playing') && (
         <div style={styles.songTitleOverlay}>
           {wallState.roundType === 'song-in-5-parts' ? `FIND: ${songTitle}` : songTitle}
+        </div>
+      )}
+
+      {/* Host pressed "Reveal Song" — big overlay with title + artist, all rounds */}
+      {revealText && (
+        <div style={{
+          position: 'absolute',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)',
+          background: 'linear-gradient(180deg, #1a1a3a, #0a0a1a)',
+          border: '3px solid #ffd700',
+          borderRadius: '20px',
+          padding: 'clamp(20px, 3vw, 40px) clamp(40px, 6vw, 80px)',
+          boxShadow: '0 0 60px #ffd70060, 0 0 120px #ffd70030',
+          zIndex: 50,
+          textAlign: 'center',
+          animation: 'scale-in 0.4s ease-out',
+        }}>
+          <div style={{
+            fontSize: 'clamp(0.8rem, 1.5vw, 1.2rem)',
+            fontWeight: 700, fontFamily: 'Montserrat',
+            color: '#a0a0b0', letterSpacing: '0.2em', textTransform: 'uppercase',
+            marginBottom: '8px',
+          }}>
+            The song was
+          </div>
+          <div style={{
+            fontSize: 'clamp(1.5rem, 4vw, 3rem)',
+            fontWeight: 900, fontFamily: 'Montserrat',
+            color: '#ffd700',
+            textShadow: '0 0 20px #ffd70080',
+            lineHeight: 1.1,
+          }}>
+            {revealText}
+          </div>
         </div>
       )}
 
@@ -164,6 +200,7 @@ export function WallScreen() {
         phase === 'result' || phase === 'wrong-other-player' ||
         phase === 'auction-offers' || phase === 'auction-bidding' || phase === 'auction-reveal' ||
         phase === 'parts-intro' || phase === 'parts-playing' ||
+        phase === 'another-level-board' ||
         (phase === 'round-intro' && wallState.roundType === 'another-level')) && (
         <div style={styles.wallContainer}>
           <div style={styles.wallGrid}>
@@ -213,40 +250,76 @@ export function WallScreen() {
         </div>
       )}
 
-      {/* Auction bid reveal overlay */}
-      {auctionBids && auctionBids.player1 != null && auctionBids.player2 != null && (phase === 'playing' || phase === 'buzzed' || phase === 'judging' || phase === 'result' || phase === 'wrong-other-player') && (
-        <div style={{
-          position: 'absolute', top: '80px', left: '50%', transform: 'translateX(-50%)',
-          display: 'flex', gap: '30px', alignItems: 'center', zIndex: 10,
-          background: '#0a0a1acc', padding: '10px 30px', borderRadius: '12px',
-          border: '1px solid #333',
-        }}>
-          <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: '0.7rem', color: '#00d4ff', fontWeight: 700, fontFamily: 'Montserrat' }}>{players[1].name}</div>
+      {/* Auction bid reveal overlay — big during the reveal pause, shrinks once music plays */}
+      {auctionBids && auctionBids.player1 != null && auctionBids.player2 != null &&
+        (phase === 'auction-reveal' || phase === 'playing' || phase === 'buzzed' || phase === 'judging' || phase === 'result' || phase === 'wrong-other-player') && (() => {
+          const isRevealPhase = phase === 'auction-reveal';
+          return (
             <div style={{
-              fontSize: '1.5rem', fontWeight: 900, fontFamily: 'Montserrat',
-              color: auctionWinner === 1 || auctionWinner === 'tied' ? '#00ff88' : '#666',
+              position: 'absolute',
+              top: isRevealPhase ? '50%' : '80px',
+              left: '50%',
+              transform: isRevealPhase ? 'translate(-50%, -50%)' : 'translateX(-50%)',
+              display: 'flex',
+              gap: isRevealPhase ? '60px' : '30px',
+              alignItems: 'center',
+              zIndex: 40,
+              background: isRevealPhase ? 'linear-gradient(180deg, #1a1a3a, #0a0a1a)' : '#0a0a1acc',
+              padding: isRevealPhase ? '32px 60px' : '10px 30px',
+              borderRadius: isRevealPhase ? '20px' : '12px',
+              border: isRevealPhase ? '3px solid #ffd700' : '1px solid #333',
+              boxShadow: isRevealPhase ? '0 0 60px #ffd70060' : 'none',
+              animation: isRevealPhase ? 'scale-in 0.4s ease-out' : 'none',
             }}>
-              {auctionBids.player1}
+              <div style={{ textAlign: 'center' }}>
+                <div style={{
+                  fontSize: isRevealPhase ? '1rem' : '0.7rem',
+                  color: '#00d4ff', fontWeight: 700, fontFamily: 'Montserrat',
+                  letterSpacing: '0.1em', textTransform: 'uppercase',
+                }}>{players[1].name}</div>
+                <div style={{
+                  fontSize: isRevealPhase ? 'clamp(3rem, 7vw, 5rem)' : '1.5rem',
+                  fontWeight: 900, fontFamily: 'Montserrat',
+                  color: auctionWinner === 1 || auctionWinner === 'tied' ? '#00ff88' : '#666',
+                  textShadow: isRevealPhase && (auctionWinner === 1 || auctionWinner === 'tied') ? '0 0 30px #00ff8880' : 'none',
+                }}>
+                  {auctionBids.player1}
+                </div>
+                {isRevealPhase && auctionWinner === 1 && (
+                  <div style={{ fontSize: '0.85rem', color: '#00ff88', fontWeight: 900, letterSpacing: '0.15em', marginTop: '6px' }}>
+                    WINNER
+                  </div>
+                )}
+              </div>
+              <div style={{ fontSize: isRevealPhase ? '1.6rem' : '1rem', color: '#ffd700', fontWeight: 900 }}>VS</div>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{
+                  fontSize: isRevealPhase ? '1rem' : '0.7rem',
+                  color: '#ff00aa', fontWeight: 700, fontFamily: 'Montserrat',
+                  letterSpacing: '0.1em', textTransform: 'uppercase',
+                }}>{players[2].name}</div>
+                <div style={{
+                  fontSize: isRevealPhase ? 'clamp(3rem, 7vw, 5rem)' : '1.5rem',
+                  fontWeight: 900, fontFamily: 'Montserrat',
+                  color: auctionWinner === 2 || auctionWinner === 'tied' ? '#00ff88' : '#666',
+                  textShadow: isRevealPhase && (auctionWinner === 2 || auctionWinner === 'tied') ? '0 0 30px #00ff8880' : 'none',
+                }}>
+                  {auctionBids.player2}
+                </div>
+                {isRevealPhase && auctionWinner === 2 && (
+                  <div style={{ fontSize: '0.85rem', color: '#00ff88', fontWeight: 900, letterSpacing: '0.15em', marginTop: '6px' }}>
+                    WINNER
+                  </div>
+                )}
+              </div>
+              {auctionWinner === 'tied' && (
+                <div style={{ fontSize: isRevealPhase ? '1rem' : '0.8rem', color: '#ffd700', fontWeight: 900, letterSpacing: '0.15em' }}>
+                  TIE!
+                </div>
+              )}
             </div>
-          </div>
-          <div style={{ fontSize: '1rem', color: '#ffd700', fontWeight: 900 }}>VS</div>
-          <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: '0.7rem', color: '#ff00aa', fontWeight: 700, fontFamily: 'Montserrat' }}>{players[2].name}</div>
-            <div style={{
-              fontSize: '1.5rem', fontWeight: 900, fontFamily: 'Montserrat',
-              color: auctionWinner === 2 || auctionWinner === 'tied' ? '#00ff88' : '#666',
-            }}>
-              {auctionBids.player2}
-            </div>
-          </div>
-          {auctionWinner === 'tied' && (
-            <div style={{ fontSize: '0.8rem', color: '#ffd700', fontWeight: 700, fontFamily: 'Montserrat' }}>
-              TIE!
-            </div>
-          )}
-        </div>
-      )}
+          );
+        })()}
 
       {/* Current part label for Song in 5 Parts */}
       {wallState.currentPartLabel && (phase === 'parts-playing') && (
@@ -312,7 +385,7 @@ export function WallScreen() {
 
 // Individual musician cell on the wall
 function MusicianCell({ musician }: { musician: WallMusician }) {
-  const { isActive, isPlaying, color, instrument, icon, label } = musician;
+  const { isActive, isPlaying, color, instrument, icon, label, speechText } = musician;
 
   // Prize board mode: label is set + instrument is empty
   const isPrizeBoard = !!label && !instrument;
@@ -334,7 +407,9 @@ function MusicianCell({ musician }: { musician: WallMusician }) {
     padding: '8px',
     transition: 'all 0.5s cubic-bezier(0.4, 0, 0.2, 1)',
     position: 'relative',
-    overflow: 'hidden',
+    // Let the R3 speech bubble overflow the cell bounds (otherwise it gets clipped above the cell)
+    overflow: speechText ? 'visible' : 'hidden',
+    zIndex: speechText ? 5 : 'auto',
     boxShadow: isPlaying
       ? `0 0 20px ${color}90, 0 0 40px ${color}50, 0 0 80px ${color}30, inset 0 0 20px ${color}30`
       : isActive
@@ -468,7 +543,7 @@ function MusicianCell({ musician }: { musician: WallMusician }) {
           ?
         </div>
       )}
-      {/* Label for auction offers etc */}
+      {/* Small bottom label (legacy) */}
       {label && (
         <div style={{
           position: 'absolute',
@@ -481,6 +556,42 @@ function MusicianCell({ musician }: { musician: WallMusician }) {
           letterSpacing: '0.05em',
         }}>
           {label}
+        </div>
+      )}
+
+      {/* Speech bubble (R3 auction offers) — floats above the cell with a downward pointer */}
+      {speechText && (
+        <div style={{
+          position: 'absolute',
+          top: '-44px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          background: '#fff',
+          color: '#0a0a1a',
+          padding: '6px 12px',
+          borderRadius: '14px',
+          fontSize: 'clamp(0.65rem, 1.1vw, 0.9rem)',
+          fontWeight: 800,
+          fontFamily: 'Montserrat, sans-serif',
+          whiteSpace: 'nowrap',
+          boxShadow: `0 4px 14px rgba(0,0,0,0.5), 0 0 0 2px ${color}88`,
+          zIndex: 30,
+          letterSpacing: '0.02em',
+          animation: isPlaying ? 'glow-pulse 1.2s ease-in-out infinite' : 'none',
+        }}>
+          {speechText}
+          {/* Pointer triangle */}
+          <div style={{
+            position: 'absolute',
+            bottom: '-7px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            width: 0,
+            height: 0,
+            borderLeft: '7px solid transparent',
+            borderRight: '7px solid transparent',
+            borderTop: '7px solid #fff',
+          }} />
         </div>
       )}
     </div>

@@ -240,6 +240,17 @@ export function useAudioEngine() {
     });
   }, []);
 
+  const fadeAllOut = useCallback((duration: number = 400) => {
+    stemsRef.current.forEach((stem) => {
+      const ctx = audioContextRef.current;
+      if (!ctx) return;
+      const now = ctx.currentTime;
+      stem.gainNode.gain.cancelScheduledValues(now);
+      stem.gainNode.gain.setValueAtTime(stem.gainNode.gain.value, now);
+      stem.gainNode.gain.linearRampToValueAtTime(0, now + duration / 1000);
+    });
+  }, []);
+
   const setStemVolume = useCallback((stemId: number, volume: number) => {
     const stem = stemsRef.current.get(stemId);
     if (stem) {
@@ -302,11 +313,14 @@ export function useAudioEngine() {
       case 'fade-all-in':
         fadeAllIn(cmd.duration);
         break;
+      case 'fade-all-out':
+        fadeAllOut(cmd.duration);
+        break;
       case 'test-tone':
         playTestTone();
         break;
     }
-  }, [loadSong, loadMultiSongs, play, pause, stop, setStemVolume, fadeInStem, fadeOutStem, fadeAllIn, playTestTone]);
+  }, [loadSong, loadMultiSongs, play, pause, stop, setStemVolume, fadeInStem, fadeOutStem, fadeAllIn, fadeAllOut, playTestTone]);
   const handleAudioCommandRef = useRef(handleAudioCommand);
   handleAudioCommandRef.current = handleAudioCommand;
 

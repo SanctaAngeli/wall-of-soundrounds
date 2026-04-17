@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useSocket } from '../hooks/useSocket';
 import { useAudioEngine } from '../hooks/useAudioEngine';
 import { formatMoney } from '@shared/types';
@@ -16,6 +16,9 @@ export function PlayerScreen({ playerId }: PlayerScreenProps) {
   });
   const [isEditing, setIsEditing] = useState(false);
   const [nameInput, setNameInput] = useState('');
+  // Tracks whether the player has ever submitted/confirmed their name this session.
+  // If false and their name is still the "Player N" default, show a blocking modal.
+  const [nameConfirmed, setNameConfirmed] = useState(false);
 
   const handleBuzz = useCallback(() => {
     if (playerState?.canBuzz) {
@@ -33,6 +36,7 @@ export function PlayerScreen({ playerId }: PlayerScreenProps) {
   const handleNameSubmit = useCallback(() => {
     if (nameInput.trim()) {
       emit('player:set-name', { playerId, name: nameInput.trim() });
+      setNameConfirmed(true);
     }
     setIsEditing(false);
   }, [nameInput, playerId, emit]);
@@ -59,6 +63,58 @@ export function PlayerScreen({ playerId }: PlayerScreenProps) {
 
   // Player color based on ID
   const playerColor = playerId === 1 ? '#00d4ff' : '#ff00aa';
+
+  // First-time name prompt: block until they enter a real name
+  const isDefaultName = name === `Player ${playerId}`;
+  if (!nameConfirmed && isDefaultName) {
+    return (
+      <div style={{
+        ...styles.container,
+        borderTop: `4px solid ${playerColor}`,
+        justifyContent: 'center', alignItems: 'center', gap: '20px', padding: '24px',
+      }}>
+        <div style={{
+          fontSize: '0.8rem', fontWeight: 700, fontFamily: 'Montserrat',
+          color: playerColor, letterSpacing: '0.2em', textTransform: 'uppercase',
+        }}>
+          Player {playerId}
+        </div>
+        <div style={{
+          fontSize: 'clamp(1.4rem, 4vw, 2rem)', fontWeight: 900, fontFamily: 'Montserrat',
+          color: '#fff', textAlign: 'center',
+        }}>
+          What's your name?
+        </div>
+        <input
+          type="text"
+          value={nameInput}
+          onChange={e => setNameInput(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && handleNameSubmit()}
+          placeholder="Type your name"
+          autoFocus
+          style={{
+            fontSize: '1.2rem', padding: '12px 16px', borderRadius: '10px',
+            border: `2px solid ${playerColor}`, background: '#1a1a3a', color: '#fff',
+            fontFamily: 'Montserrat', width: '80%', maxWidth: '320px', textAlign: 'center',
+            outline: 'none',
+          }}
+        />
+        <button
+          onClick={handleNameSubmit}
+          disabled={!nameInput.trim()}
+          style={{
+            padding: '14px 32px', borderRadius: '12px', border: 'none',
+            background: nameInput.trim() ? playerColor : '#333',
+            color: nameInput.trim() ? '#000' : '#666',
+            fontSize: '1rem', fontFamily: 'Montserrat', fontWeight: 900,
+            letterSpacing: '0.1em', cursor: nameInput.trim() ? 'pointer' : 'not-allowed',
+          }}
+        >
+          START
+        </button>
+      </div>
+    );
+  }
 
   // Status message based on phase
   let statusText = '';
@@ -201,11 +257,21 @@ export function PlayerScreen({ playerId }: PlayerScreenProps) {
                       fontSize: '0.8rem',
                       cursor: auctionCanBid ? 'pointer' : 'default',
                       opacity: disabled ? 0.4 : 1,
-                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                      display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: '4px',
                     }}
                   >
-                    <span>{offer.musicians} musician{offer.musicians > 1 ? 's' : ''}</span>
-                    <span style={{ color: '#ffd700', fontWeight: 900 }}>{formatMoney(offer.prize)}</span>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span>{offer.musicians} musician{offer.musicians > 1 ? 's' : ''}</span>
+                      <span style={{ color: '#ffd700', fontWeight: 900 }}>{formatMoney(offer.prize)}</span>
+                    </div>
+                    {offer.instruments && offer.instruments.length > 0 && (
+                      <div style={{
+                        fontSize: '0.65rem', color: disabled ? '#555' : '#a0a0b0',
+                        fontWeight: 500, letterSpacing: '0.02em',
+                      }}>
+                        {offer.instruments.join(' + ')}
+                      </div>
+                    )}
                   </button>
                 );
               })}

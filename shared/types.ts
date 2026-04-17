@@ -17,11 +17,15 @@ export interface Song {
   year: number;
   difficulty: 'easy' | 'medium' | 'hard';
   genre?: string;
+  // Primary 5 stems used by R1 "5 to 1" and R2 "Another Level": D/B/K/G/V
   stems: Stem[];
+  // Optional richer stems (horns, perc, BVs, 4 named LVs, clue) for R3/R4.
+  // Only present for songs from the new WOS library.
+  extraStems?: Stem[];
   wrongAnswers: string[];
 }
 
-export type RoundType = '1to5' | 'another-level' | 'music-auction' | 'song-in-5-parts';
+export type RoundType = '5to1' | 'another-level' | 'music-auction' | 'song-in-5-parts';
 
 export type GamePhase =
   | 'lobby'
@@ -33,6 +37,8 @@ export type GamePhase =
   | 'result'
   | 'round-complete'
   | 'game-over'
+  // Another Level specific: board-view between song picks
+  | 'another-level-board'
   // Music Auction specific
   | 'auction-offers'
   | 'auction-bidding'
@@ -58,7 +64,8 @@ export interface WallMusician {
   color: string;
   isActive: boolean;
   isPlaying: boolean;
-  label?: string; // For auction offers like "$15,000"
+  label?: string; // Short bottom-of-cell label (e.g. prize board "$1k")
+  speechText?: string; // Speech-bubble text floating above the cell (R3 auction offers)
 }
 
 // ============================================
@@ -77,6 +84,8 @@ export interface WallState {
   buzzedPlayer: 1 | 2 | null;
   visualEffect: 'none' | 'correct' | 'wrong' | 'reveal' | 'gold' | 'buzz';
   songTitle?: string;
+  // Host pressed "Reveal Song" — wall shows the full title + artist as an overlay
+  revealText?: string;
   message?: string;
   // Auction: which musician is making the current offer
   auctionHighlight?: { cellId: number; offerText: string } | null;
@@ -87,6 +96,17 @@ export interface WallState {
   genre?: string;
   // Song in 5 Parts: which part is currently playing
   currentPartLabel?: string;
+  // Another Level: picked-group persistence (drives cell lit/dark rendering)
+  anotherLevelCurrentGroup?: string;
+  anotherLevelCompletedGroups?: string[];
+  // Song in 5 Parts v2 column-hunt
+  partsCurrentCol?: number;
+  partsCurrentRow?: number;
+  partsPassCount?: number;
+  partsColumnWinners?: ({ player: 1 | 2; songIndex: 0 | 1 | 2 } | null)[];
+  partsColumnForfeits?: boolean[];
+  partsLockedPlayers?: (1 | 2)[];
+  partsRevealing?: boolean;
 }
 
 export interface PlayerState {
@@ -102,8 +122,8 @@ export interface PlayerState {
   totalSongs: number;
   resultMessage: string;
   currentPrize: number;
-  // Auction
-  auctionOffers?: { musicians: number; prize: number }[];
+  // Auction — each option's cumulative instrument list (bid N = hear first N musicians' stems)
+  auctionOffers?: { musicians: number; prize: number; instruments: string[] }[];
   auctionCanBid?: boolean;
   auctionMyBid?: number | null;
   auctionOtherBid?: number | null;
@@ -120,6 +140,7 @@ export interface AuctionOffer {
   musicianCount: number;
   prize: number;
   revealed: boolean;
+  cellId: number; // Which wall cell (1-15) hosts this offer. Randomised per song.
 }
 
 export interface SongPart {
@@ -158,10 +179,26 @@ export interface HostState {
   songParts: SongPart[];
   currentPartIndex: number;
   anotherLevelConfig: { songId: string; group: string; stemInstruments: string[]; prize: number }[];
+  // Another Level: lifecycle across picks
+  anotherLevelCurrentGroup?: string;
+  anotherLevelCompletedGroups?: string[];
+  anotherLevelPlayableGroups?: { group: string; songTitle: string; songArtist: string; prize: number; instruments: string[] }[];
+  // 15 cells for the host-side click grid: row, col, prize, group color, group name, column instrument + icon
+  anotherLevelCells?: { row: number; col: number; prize: number; color: string; group: string; instrument: string; icon: string }[];
   // Song in 5 Parts: multi-song info
   partsTargetRow?: number;
   partsTargetSongTitle?: string;
   partsSongs?: { title: string; artist: string; row: number }[];
+  // Song in 5 Parts v2 column-hunt (host-facing controls need these)
+  partsCurrentCol?: number;
+  partsCurrentRow?: number;
+  partsPassCount?: number;
+  partsColumnWinners?: ({ player: 1 | 2; songIndex: 0 | 1 | 2 } | null)[];
+  partsColumnForfeits?: boolean[];
+  partsLockedPlayers?: (1 | 2)[];
+  partsRevealing?: boolean;
+  // Full scatter for host display — which song (0=target, 1-2=decoys) is on each cell
+  partsScatter?: { row: number; col: number; songIndex: 0 | 1 | 2 }[];
 }
 
 // ============================================
@@ -178,6 +215,7 @@ export type AudioCommand =
   | { action: 'fade-in-stem'; stemId: number; duration: number }
   | { action: 'fade-out-stem'; stemId: number; duration: number }
   | { action: 'fade-all-in'; duration: number }
+  | { action: 'fade-all-out'; duration: number }
   | { action: 'test-tone' };
 
 // ============================================
@@ -205,14 +243,25 @@ export interface ClientEvents {
   'host:end-round': {};
   'host:reset': {};
   'host:set-stem': { stemId: number; active: boolean };
+  // Reveal the current song's title + artist on the wall (all rounds)
+  'host:reveal-song': {};
+  // Another Level
+  'host:al-select-group': { group: string };
+  'host:al-back-to-board': {};
   // Auction
   'host:auction-next-offer': {};
   'host:auction-start-bidding': {};
   'host:auction-reveal-bids': {};
+  'host:auction-start-music': {};
   'player:auction-bid': { playerId: 1 | 2; musicianCount: number };
   // Song in 5 Parts
   'host:parts-next': {};
   'host:parts-play-current': {};
+  // Song in 5 Parts v2 (column-hunt): start a column (0-4), step to next stem manually, advance col, reveal
+  'host:parts-start-column': { col: number };
+  'host:parts-next-stem': {};
+  'host:parts-next-column': {};
+  'host:parts-reveal': {};
 }
 
 // Server -> Client
@@ -261,7 +310,7 @@ export const ROW_COLORS = [
 ];
 
 export const ROUND_NAMES: Record<RoundType, string> = {
-  '1to5': '1 TO 5',
+  '5to1': '5 TO 1',
   'another-level': 'ANOTHER LEVEL',
   'music-auction': 'MUSIC AUCTION',
   'song-in-5-parts': 'SONG IN 5 PARTS',

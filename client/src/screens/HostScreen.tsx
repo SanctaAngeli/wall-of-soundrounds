@@ -80,7 +80,7 @@ export function HostScreen() {
             <div style={styles.section}>
               <h2 style={styles.sectionTitle}>Select Round</h2>
               <div style={styles.roundGrid}>
-                {(['1to5', 'another-level', 'music-auction', 'song-in-5-parts'] as RoundType[]).map(r => (
+                {(['5to1', 'another-level', 'music-auction', 'song-in-5-parts'] as RoundType[]).map(r => (
                   <button key={r} onClick={() => emit('host:select-round', { round: r })} style={styles.roundCard}>
                     <div style={styles.roundCardTitle}>{ROUND_NAMES[r]}</div>
                     <div style={styles.roundCardDesc}>{roundDescs[r]}</div>
@@ -117,34 +117,43 @@ export function HostScreen() {
                   </span>
                 )}
               </div>
-              {/* Another Level: show song progression with prizes */}
+              {/* Another Level: song summary (highlight = currently playing group, dim = done) */}
               {roundType === 'another-level' && anotherLevelConfig.length > 0 && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '8px' }}>
-                  {anotherLevelConfig.map((cfg, i) => (
-                    <div key={i} style={{
-                      display: 'flex', alignItems: 'center', gap: '8px',
-                      padding: '4px 8px', borderRadius: '4px',
-                      background: i === songNumber - 1 ? '#ffd70022' : '#1a1a3a',
-                      border: `1px solid ${i === songNumber - 1 ? '#ffd700' : '#333'}`,
-                      fontSize: '0.75rem',
-                    }}>
-                      <span style={{ fontWeight: 800, color: '#a0a0b0', minWidth: '20px' }}>{i + 1}</span>
-                      <span style={{ color: i === songNumber - 1 ? '#ffd700' : '#fff', fontWeight: i === songNumber - 1 ? 800 : 400 }}>
-                        {cfg.stemInstruments.join(' + ')}
-                      </span>
-                      <span style={{ marginLeft: 'auto', fontWeight: 700, color: '#ffd700', fontFamily: 'Montserrat' }}>
-                        {formatMoney(cfg.prize)}
-                      </span>
-                      {i === songNumber - 1 && (
-                        <span style={{ fontSize: '0.65rem', background: '#ffd700', color: '#000', padding: '1px 6px', borderRadius: '4px', fontWeight: 700 }}>
-                          NOW
+                  {anotherLevelConfig.map((cfg) => {
+                    const isNow = cfg.group === hostState.anotherLevelCurrentGroup;
+                    const isDone = hostState.anotherLevelCompletedGroups?.includes(cfg.group);
+                    return (
+                      <div key={cfg.group} style={{
+                        display: 'flex', alignItems: 'center', gap: '8px',
+                        padding: '4px 8px', borderRadius: '4px',
+                        background: isNow ? '#ffd70022' : '#1a1a3a',
+                        border: `1px solid ${isNow ? '#ffd700' : '#333'}`,
+                        fontSize: '0.75rem',
+                        opacity: isDone && !isNow ? 0.5 : 1,
+                      }}>
+                        <span style={{ color: isNow ? '#ffd700' : '#fff', fontWeight: isNow ? 800 : 400 }}>
+                          {cfg.stemInstruments.join(' + ')}
                         </span>
-                      )}
-                    </div>
-                  ))}
+                        <span style={{ marginLeft: 'auto', fontWeight: 700, color: '#ffd700', fontFamily: 'Montserrat' }}>
+                          {formatMoney(cfg.prize)}
+                        </span>
+                        {isNow && (
+                          <span style={{ fontSize: '0.65rem', background: '#ffd700', color: '#000', padding: '1px 6px', borderRadius: '4px', fontWeight: 700 }}>
+                            NOW
+                          </span>
+                        )}
+                        {isDone && !isNow && (
+                          <span style={{ fontSize: '0.65rem', color: '#606070', fontWeight: 700 }}>
+                            DONE
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
-              {/* Show 3 songs with row assignments for Song in 5 Parts */}
+              {/* Song in 5 Parts: 3 songs (target + 2 herrings) — now scattered across the whole wall */}
               {roundType === 'song-in-5-parts' && partsSongs && partsSongs.length > 0 && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '8px' }}>
                   {partsSongs.map((s) => (
@@ -155,9 +164,8 @@ export function HostScreen() {
                       border: `1px solid ${s.row === partsTargetRow ? '#ffd700' : '#333'}`,
                       fontSize: '0.75rem',
                     }}>
-                      <span style={{ fontWeight: 800, color: '#a0a0b0', minWidth: '50px' }}>Row {s.row}</span>
                       <span style={{ color: s.row === partsTargetRow ? '#ffd700' : '#fff', fontWeight: s.row === partsTargetRow ? 800 : 400 }}>
-                        {s.title} - {s.artist}
+                        {s.title} — {s.artist}
                       </span>
                       {s.row === partsTargetRow && (
                         <span style={{ marginLeft: 'auto', fontSize: '0.65rem', background: '#ffd700', color: '#000', padding: '1px 6px', borderRadius: '4px', fontWeight: 700 }}>
@@ -169,6 +177,94 @@ export function HostScreen() {
                 </div>
               )}
             </div>
+
+            {/* ============================================ */}
+            {/* ANOTHER LEVEL: Clickable 5×3 grid              */}
+            {/* ============================================ */}
+            {roundType === 'another-level' && hostState.anotherLevelCells && (
+              <div style={styles.section}>
+                <h2 style={styles.sectionTitle}>Another Level</h2>
+
+                {phase === 'another-level-board' && (
+                  <div style={{ fontSize: '0.8rem', color: '#a0a0b0', marginBottom: '8px' }}>
+                    Click the square contestants picked — plays its group's song with those instruments.
+                  </div>
+                )}
+
+                {/* 5×3 grid matching the wall */}
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(5, 1fr)',
+                  gap: '6px',
+                  marginBottom: '10px',
+                }}>
+                  {hostState.anotherLevelCells.map(cell => {
+                    const done = hostState.anotherLevelCompletedGroups?.includes(cell.group) ?? false;
+                    const isNow = cell.group === hostState.anotherLevelCurrentGroup;
+                    const prizeLabel = cell.prize >= 1000 ? `$${cell.prize / 1000}k` : `$${cell.prize}`;
+                    return (
+                      <button
+                        key={`${cell.row}-${cell.col}`}
+                        disabled={done && !isNow}
+                        onClick={() => emit('host:al-select-group', { group: cell.group })}
+                        title={`${cell.instrument} • ${cell.group} group`}
+                        style={{
+                          aspectRatio: '1',
+                          background: isNow
+                            ? `linear-gradient(180deg, ${cell.color}55, ${cell.color}30)`
+                            : done
+                              ? `linear-gradient(180deg, ${cell.color}10, ${cell.color}05)`
+                              : `linear-gradient(180deg, ${cell.color}25, ${cell.color}15)`,
+                          border: `2px solid ${isNow ? cell.color : cell.color + '55'}`,
+                          borderRadius: '8px',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '2px',
+                          color: '#fff',
+                          cursor: done && !isNow ? 'not-allowed' : 'pointer',
+                          opacity: done && !isNow ? 0.35 : 1,
+                          padding: '4px',
+                          transition: 'all 0.2s',
+                        }}
+                      >
+                        <span style={{ fontSize: '1.4rem', lineHeight: 1 }}>{cell.icon}</span>
+                        <span style={{ fontSize: '0.65rem', color: cell.color, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                          {cell.instrument}
+                        </span>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 900, fontFamily: 'Montserrat', color: '#ffd700' }}>
+                          {prizeLabel}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Back to Board — during/after a song plays */}
+                {phase !== 'another-level-board' && hostState.anotherLevelCurrentGroup && (
+                  <button
+                    onClick={() => emit('host:al-back-to-board')}
+                    style={{
+                      ...styles.controlBtn,
+                      background: '#00d4ff',
+                      color: '#000',
+                      width: '100%',
+                      padding: '10px',
+                      fontWeight: 900,
+                    }}
+                  >
+                    ← BACK TO THE BOARD
+                  </button>
+                )}
+
+                {hostState.anotherLevelCompletedGroups && hostState.anotherLevelCompletedGroups.length > 0 && (
+                  <div style={{ fontSize: '0.7rem', color: '#a0a0b0', marginTop: '6px' }}>
+                    Done: {hostState.anotherLevelCompletedGroups.length}/{hostState.anotherLevelPlayableGroups?.length ?? 0}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* ============================================ */}
             {/* MUSIC AUCTION: Offer + Bidding Controls        */}
@@ -332,85 +428,165 @@ export function HostScreen() {
                     )}
                   </div>
                 )}
+
+                {/* Reveal phase: pause for audience to absorb bids, then host kicks off the music */}
+                {phase === 'auction-reveal' && (
+                  <button
+                    onClick={() => emit('host:auction-start-music')}
+                    style={{
+                      ...styles.controlBtn,
+                      background: '#00ff88', color: '#000', width: '100%',
+                      marginTop: '10px', fontWeight: 900, padding: '14px', fontSize: '1rem',
+                    }}
+                  >
+                    ▶ PLAY MUSIC
+                  </button>
+                )}
               </div>
             )}
 
             {/* ============================================ */}
-            {/* SONG IN 5 PARTS: Part Controls                */}
+            {/* SONG IN 5 PARTS v2: Column-hunt controls      */}
             {/* ============================================ */}
-            {roundType === 'song-in-5-parts' && (phase === 'parts-intro' || phase === 'parts-playing' || phase === 'playing') && (
+            {roundType === 'song-in-5-parts' && (
               <div style={styles.section}>
-                <h2 style={styles.sectionTitle}>Parts Grid (Drums → Vocals)</h2>
-                {/* Compact 5x3 grid matching the wall layout */}
-                <div style={{
-                  display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '3px',
-                  marginBottom: '10px',
-                }}>
-                  {/* Column headers */}
-                  {['Dr', 'Ba', 'Ky', 'Gt', 'Vo'].map((label, col) => (
-                    <div key={`h-${col}`} style={{
-                      textAlign: 'center', fontSize: '0.6rem', fontWeight: 700, color: '#606080',
-                      padding: '2px 0', fontFamily: 'Montserrat',
-                    }}>{label}</div>
-                  ))}
-                  {/* 3 rows x 5 cols of cells */}
-                  {[1, 2, 3].map(row =>
-                    [0, 1, 2, 3, 4].map(col => {
-                      const part = songParts.find(p => p.row === row && p.col === col);
-                      const isTarget = row === partsTargetRow;
-                      return (
-                        <div key={`${row}-${col}`} style={{
-                          padding: '6px 2px',
-                          borderRadius: '4px',
-                          textAlign: 'center',
-                          fontSize: '0.6rem',
-                          fontWeight: 700,
-                          fontFamily: 'Montserrat',
-                          background: part?.isCurrent ? '#ffd70033'
-                            : part?.isPlayed ? '#00ff8833'
-                            : part ? '#1a1a3a' : '#0d0d1a',
-                          border: `1px solid ${
-                            part?.isCurrent ? '#ffd700'
-                            : part?.isPlayed ? '#00ff88'
-                            : isTarget ? '#ffd70044'
-                            : '#222'
-                          }`,
-                          color: part?.isCurrent ? '#ffd700'
-                            : part?.isPlayed ? '#00ff88'
-                            : part ? '#666' : '#333',
-                        }}>
-                          {part?.isCurrent ? '\u25B6' : part?.isPlayed ? '\u2713' : part ? '\u00B7' : ''}
+                <h2 style={styles.sectionTitle}>Column Hunt</h2>
+
+                {(() => {
+                  const colNames = ['Vocals', 'Guitar', 'Keys', 'Bass', 'Drums'];
+                  const currCol = hostState.partsCurrentCol ?? -1;
+                  const currRow = hostState.partsCurrentRow ?? 0;
+                  const passCount = hostState.partsPassCount ?? 0;
+                  const winners = hostState.partsColumnWinners ?? [null, null, null, null, null];
+                  const forfeits = hostState.partsColumnForfeits ?? [false, false, false, false, false];
+                  const locked = hostState.partsLockedPlayers ?? [];
+                  const roundOver = phase === 'round-complete';
+                  const notStarted = currCol < 0;
+                  const colResolved = currCol >= 0 && (winners[currCol] || forfeits[currCol]);
+
+                  return (
+                    <>
+                      {/* Column status row */}
+                      <div style={{
+                        display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '4px',
+                        marginBottom: '10px',
+                      }}>
+                        {colNames.map((name, col) => {
+                          const winner = winners[col];
+                          const forfeit = forfeits[col];
+                          const isCurrent = col === currCol;
+                          const bg = winner ? (winner.player === 1 ? '#00d4ff33' : '#ff00aa33')
+                                   : forfeit ? '#44444433'
+                                   : isCurrent ? '#ffd70022' : '#1a1a3a';
+                          const border = winner ? (winner.player === 1 ? '#00d4ff' : '#ff00aa')
+                                      : forfeit ? '#666'
+                                      : isCurrent ? '#ffd700' : '#333';
+                          return (
+                            <div key={col} style={{
+                              padding: '6px 2px', borderRadius: '4px',
+                              background: bg, border: `1px solid ${border}`,
+                              textAlign: 'center', fontSize: '0.7rem', fontFamily: 'Montserrat',
+                            }}>
+                              <div style={{ fontWeight: 800, color: isCurrent ? '#ffd700' : '#a0a0b0' }}>{name}</div>
+                              <div style={{ fontSize: '0.65rem', color: winner ? '#fff' : forfeit ? '#888' : '#606080', marginTop: '2px' }}>
+                                {winner ? `P${winner.player} +$1k`
+                                 : forfeit ? 'forfeit'
+                                 : isCurrent ? `R${currRow} · pass ${passCount + 1}/2`
+                                 : '—'}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {/* Locked players indicator (current column) */}
+                      {locked.length > 0 && (
+                        <div style={{ fontSize: '0.7rem', color: '#ff6b6b', marginBottom: '8px' }}>
+                          Locked this column: {locked.map(p => `P${p}`).join(', ')}
                         </div>
-                      );
-                    })
-                  )}
-                </div>
-                <div style={styles.buttonRow}>
-                  <button
-                    onClick={() => emit('host:parts-next')}
-                    disabled={currentPartIndex >= songParts.length - 1 && currentPartIndex >= 0}
-                    style={{
-                      ...styles.controlBtn,
-                      background: (currentPartIndex < songParts.length - 1 || currentPartIndex < 0) ? '#ffd700' : '#333',
-                      color: '#000',
-                      opacity: (currentPartIndex < songParts.length - 1 || currentPartIndex < 0) ? 1 : 0.4,
-                    }}
-                  >
-                    {currentPartIndex < 0 ? 'START' : 'NEXT CELL'}
-                  </button>
-                  <button
-                    onClick={() => emit('host:parts-play-current')}
-                    disabled={currentPartIndex < 0}
-                    style={{
-                      ...styles.controlBtn,
-                      background: currentPartIndex >= 0 ? '#00ff88' : '#333',
-                      color: '#000',
-                      opacity: currentPartIndex >= 0 ? 1 : 0.4,
-                    }}
-                  >
-                    PLAY
-                  </button>
-                </div>
+                      )}
+
+                      {/* Host-only cell-song map: which song lives in each (row, col) scatter slot.
+                          Target (songIndex=0) = GOLD, decoys = dim. Current cell is boxed. */}
+                      {hostState.partsScatter && partsSongs && partsSongs.length === 3 && (
+                        <div style={{ marginBottom: '10px' }}>
+                          <div style={{ fontSize: '0.65rem', color: '#a0a0b0', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '4px' }}>
+                            Scatter (your eyes only)
+                          </div>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '3px' }}>
+                            {[1, 2, 3].map(row => colNames.map((_, col) => {
+                              const slot = hostState.partsScatter?.find(s => s.row === row && s.col === col);
+                              const songTitle = slot ? partsSongs[slot.songIndex]?.title ?? '?' : '?';
+                              const isTarget = slot?.songIndex === 0;
+                              const isCurrent = col === currCol && row === currRow && !colResolved;
+                              return (
+                                <div key={`${row}-${col}`} style={{
+                                  padding: '4px 3px', borderRadius: '3px',
+                                  background: isTarget ? '#ffd70022' : '#1a1a3a',
+                                  border: `1px solid ${isCurrent ? '#ffd700' : isTarget ? '#ffd70044' : '#333'}`,
+                                  boxShadow: isCurrent ? '0 0 8px #ffd70080' : 'none',
+                                  fontSize: '0.55rem', fontFamily: 'Montserrat', fontWeight: 700,
+                                  color: isTarget ? '#ffd700' : '#a0a0b0',
+                                  textAlign: 'center',
+                                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                }} title={`${colNames[col]} · Row ${row} · ${songTitle}`}>
+                                  {songTitle.slice(0, 12)}
+                                </div>
+                              );
+                            }))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Primary action button(s) */}
+                      {!roundOver && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          {notStarted ? (
+                            <button
+                              onClick={() => emit('host:parts-start-column', { col: 0 })}
+                              style={{ ...styles.controlBtn, background: '#ffd700', color: '#000', width: '100%', fontWeight: 900 }}
+                            >
+                              START COLUMN 1 ({colNames[0].toUpperCase()})
+                            </button>
+                          ) : colResolved ? (
+                            <button
+                              onClick={() => emit('host:parts-next-column')}
+                              style={{ ...styles.controlBtn, background: '#00d4ff', color: '#000', width: '100%', fontWeight: 900 }}
+                            >
+                              {currCol >= 4 ? 'FINISH ROUND' : `→ COLUMN ${currCol + 2} (${colNames[currCol + 1]?.toUpperCase() ?? ''})`}
+                            </button>
+                          ) : (
+                            <>
+                              <button
+                                onClick={() => emit('host:parts-next-stem')}
+                                disabled={buzzedPlayer != null}
+                                style={{
+                                  ...styles.controlBtn,
+                                  background: buzzedPlayer != null ? '#333' : '#ffd700',
+                                  color: buzzedPlayer != null ? '#666' : '#000',
+                                  opacity: buzzedPlayer != null ? 0.5 : 1,
+                                  width: '100%', fontWeight: 900, padding: '14px',
+                                }}
+                              >
+                                ▶ NEXT STEM (row {currRow} → {currRow === 3 ? 1 : currRow + 1})
+                              </button>
+                              <button
+                                onClick={() => emit('host:parts-reveal')}
+                                style={{ ...styles.controlBtn, background: '#666', color: '#fff', width: '100%' }}
+                              >
+                                REVEAL TARGET (end this column)
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      )}
+
+                      <div style={{ fontSize: '0.65rem', color: '#606080', marginTop: '6px', fontStyle: 'italic' }}>
+                        Host controls pacing: press NEXT STEM when ready. Buzz claims whichever cell is currently playing. Wrong = player locked for this column. After 2 full passes NEXT STEM auto-reveals.
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
             )}
 
@@ -435,6 +611,19 @@ export function HostScreen() {
                   style={{ ...styles.controlBtn, background: '#333', color: '#fff' }}
                 >
                   STOP
+                </button>
+                <button
+                  onClick={() => emit('host:reveal-song')}
+                  disabled={!currentSong}
+                  style={{
+                    ...styles.controlBtn,
+                    background: currentSong ? '#ffd700' : '#333',
+                    color: '#000',
+                    opacity: currentSong ? 1 : 0.4,
+                    flex: 'none', padding: '12px 20px', fontWeight: 900,
+                  }}
+                >
+                  REVEAL SONG
                 </button>
                 <button
                   onClick={() => emit('host:test-tone')}
@@ -493,33 +682,45 @@ export function HostScreen() {
             </div>
 
             {/* ============================================ */}
-            {/* UNIVERSAL: Buzz / Judge Panel                 */}
+            {/* UNIVERSAL: Buzz / Judge Panel (sticky to top) */}
             {/* ============================================ */}
             {buzzedPlayer && (phase === 'buzzed' || phase === 'judging' || phase === 'wrong-other-player') && (
-              <div style={{ ...styles.section, border: '2px solid #ffd700' }}>
-                <h2 style={{ ...styles.sectionTitle, color: '#ffd700' }}>
-                  {players[buzzedPlayer].name} BUZZED IN!
+              <div style={{
+                ...styles.section,
+                border: '3px solid #ffd700',
+                position: 'sticky',
+                top: '0',
+                zIndex: 100,
+                background: 'linear-gradient(180deg, #2a2010, #1a1a1a)',
+                boxShadow: '0 4px 20px rgba(255, 215, 0, 0.4)',
+                animation: 'glow-pulse 1.2s ease-in-out infinite',
+              }}>
+                <h2 style={{ ...styles.sectionTitle, color: '#ffd700', fontSize: '1.2rem' }}>
+                  🔔 {players[buzzedPlayer].name} BUZZED IN — JUDGE NOW
                 </h2>
                 <div style={styles.buttonRow}>
-                  <button onClick={() => emit('host:mark-correct')} style={{ ...styles.controlBtn, ...styles.correctBtn }}>
-                    CORRECT
+                  <button onClick={() => emit('host:mark-correct')} style={{ ...styles.controlBtn, ...styles.correctBtn, fontSize: '1rem', padding: '14px' }}>
+                    ✓ CORRECT (+{formatMoney(currentPrize || 1000)})
                   </button>
-                  <button onClick={() => emit('host:mark-wrong')} style={{ ...styles.controlBtn, ...styles.wrongBtn }}>
-                    WRONG
+                  <button onClick={() => emit('host:mark-wrong')} style={{ ...styles.controlBtn, ...styles.wrongBtn, fontSize: '1rem', padding: '14px' }}>
+                    ✗ WRONG
                   </button>
                 </div>
-                <button
-                  onClick={() => emit('host:give-to-other')}
-                  style={{
-                    ...styles.controlBtn,
-                    background: '#ff8c00',
-                    color: '#000',
-                    width: '100%',
-                    marginTop: '8px',
-                  }}
-                >
-                  WRONG - GIVE TO {players[buzzedPlayer === 1 ? 2 : 1].name.toUpperCase()}
-                </button>
+                {/* Give-to-other only makes sense outside R4 (R4 uses per-column lockout instead) */}
+                {roundType !== 'song-in-5-parts' && (
+                  <button
+                    onClick={() => emit('host:give-to-other')}
+                    style={{
+                      ...styles.controlBtn,
+                      background: '#ff8c00',
+                      color: '#000',
+                      width: '100%',
+                      marginTop: '8px',
+                    }}
+                  >
+                    WRONG — GIVE TO {players[buzzedPlayer === 1 ? 2 : 1].name.toUpperCase()}
+                  </button>
+                )}
               </div>
             )}
 
@@ -679,10 +880,10 @@ function ScoreControl({ name, score, color, onAdjust }: {
 }
 
 const roundDescs: Record<RoundType, string> = {
-  '1to5': '5 songs, $1k-$5k each. Progressive stem reveal, buzz to guess.',
+  '5to1': '5 songs. Song 1 plays 5 instruments, song 5 plays just 1. Fewer = harder = more money.',
   'another-level': 'Prize board with 3 levels. Stems play immediately, buzz to guess.',
   'music-auction': 'Musicians make offers, players secretly bid. Fewest musicians wins!',
-  'song-in-5-parts': '3 songs on 3 rows. Find the target! Instruments play cell by cell.',
+  'song-in-5-parts': '3 songs scattered across 15 cells. Find the target (announced first). Vocals revealed first, then guitar → drums.',
 };
 
 const styles: Record<string, React.CSSProperties> = {
