@@ -1,7 +1,7 @@
 import type {
   GamePhase, RoundType, Song, WallMusician, PlayerInfo,
   WallState, PlayerState, HostState,
-  AuctionOffer, SongPart,
+  AuctionOffer, SongPart, GameConfig,
 } from '../shared/types.js';
 import { ROW_COLORS, WALL_INSTRUMENTS, ROUND_NAMES, formatMoney } from '../shared/types.js';
 import { getSongsForRound, getSongById, getPartsQuestion, getPartsColumnSongs, roundPrizes, partsQuestions, partsColumnQuestions, anotherLevelBoard, anotherLevelSongs, AL_COL_INSTRUMENTS } from './data/songs.js';
@@ -78,6 +78,9 @@ export interface GameState {
   partsLockedPlayers: (1 | 2)[];                                             // players locked out for the CURRENT col
   partsRevealing: boolean;                                                   // true while showing target after forfeit
   partsTimerInterval: ReturnType<typeof setInterval> | null;
+
+  // Editable setup config — host mutates via /setup; overrides the hard-coded roundSongSets etc.
+  config: GameConfig;
 }
 
 export function createInitialState(): GameState {
@@ -127,6 +130,84 @@ export function createInitialState(): GameState {
     partsLockedPlayers: [],
     partsRevealing: false,
     partsTimerInterval: null,
+    config: {
+      roundLineups: {},
+      anotherLevelGroupSongs: {},
+      partsColumnOverrides: {},
+    },
+  };
+}
+
+// ============================================
+// Config-aware lookups — honour the host's setup edits, fall back to hard-coded defaults
+// ============================================
+
+// Get the ordered song list for a round, using config override if set.
+export function resolveRoundLineup(state: GameState, round: RoundType): string[] {
+  const override = state.config.roundLineups[round];
+  if (override && override.length > 0) return override;
+  // Default from hard-coded config (roundSongSets is imported where called)
+  return [];
+}
+
+// Resolve the songId for an R2 group, using config override if set.
+export function resolveAnotherLevelGroupSong(state: GameState, group: string, defaultSongId: string): string {
+  return state.config.anotherLevelGroupSongs?.[group] ?? defaultSongId;
+}
+
+// Resolve the target + decoys for an R4 column, using config override if set.
+export function resolvePartsColumn(
+  state: GameState,
+  col: number,
+  defaults: { targetSongId: string; decoy1SongId: string; decoy2SongId: string }
+): { targetSongId: string; decoy1SongId: string; decoy2SongId: string } {
+  return state.config.partsColumnOverrides?.[col] ?? defaults;
+}
+
+// Config mutators — called by socket handlers
+export function setRoundLineup(state: GameState, round: RoundType, songIds: string[]): void {
+  state.config.roundLineups[round] = songIds;
+}
+
+export function setAnotherLevelGroupSong(state: GameState, group: string, songId: string): void {
+  if (!state.config.anotherLevelGroupSongs) state.config.anotherLevelGroupSongs = {};
+  state.config.anotherLevelGroupSongs[group] = songId;
+}
+
+export function setPartsColumnOverride(
+  state: GameState,
+  col: number,
+  targetSongId: string,
+  decoy1SongId: string,
+  decoy2SongId: string
+): void {
+  if (!state.config.partsColumnOverrides) state.config.partsColumnOverrides = {};
+  state.config.partsColumnOverrides[col] = { targetSongId, decoy1SongId, decoy2SongId };
+}
+
+export function setStemOrderForSong(state: GameState, songId: string, stemIds: number[]): void {
+  if (!state.config.stemOrderBySong) state.config.stemOrderBySong = {};
+  state.config.stemOrderBySong[songId] = stemIds;
+}
+
+export function setAuctionOverride(state: GameState, songId: string, title?: string, genre?: string): void {
+  if (!state.config.musicAuctionOverrides) state.config.musicAuctionOverrides = {};
+  const curr = state.config.musicAuctionOverrides[songId] ?? {};
+  state.config.musicAuctionOverrides[songId] = {
+    title: title !== undefined ? title : curr.title,
+    genre: genre !== undefined ? genre : curr.genre,
+  };
+}
+
+export function resetConfig(state: GameState): void {
+  state.config = { roundLineups: {}, anotherLevelGroupSongs: {}, partsColumnOverrides: {}, stemOrderBySong: {}, musicAuctionOverrides: {} };
+}
+
+export function importConfig(state: GameState, config: GameConfig): void {
+  state.config = {
+    roundLineups: config.roundLineups ?? {},
+    anotherLevelGroupSongs: config.anotherLevelGroupSongs ?? {},
+    partsColumnOverrides: config.partsColumnOverrides ?? {},
   };
 }
 
@@ -356,7 +437,9 @@ export function deriveWallState(state: GameState): WallState {
     auctionBids: isAuction && auctionRevealed ? state.auctionBids : undefined,
     auctionWinner: isAuction && auctionRevealed ? state.auctionWinner : undefined,
     auctionTimer: isAuction ? state.auctionTimerValue : undefined,
-    genre: isAuction ? state.currentSong?.genre : undefined,
+    genre: isAuction
+      ? (state.currentSong ? (state.config.musicAuctionOverrides?.[state.currentSong.id]?.genre ?? state.currentSong.genre) : undefined)
+      : undefined,
     currentPartLabel,
     anotherLevelCurrentGroup: state.roundType === 'another-level' ? state.anotherLevelCurrentGroup : undefined,
     anotherLevelCompletedGroups: state.roundType === 'another-level' ? state.anotherLevelCompletedGroups : undefined,
@@ -504,6 +587,7 @@ export function deriveHostState(state: GameState): HostState {
     partsLockedPlayers: state.roundType === 'song-in-5-parts' ? state.partsLockedPlayers : undefined,
     partsRevealing: state.roundType === 'song-in-5-parts' ? state.partsRevealing : undefined,
     partsScatter: state.roundType === 'song-in-5-parts' ? state.partsScatter : undefined,
+    config: state.config,
     partsColumnSongs: state.roundType === 'song-in-5-parts'
       ? state.partsColumnSongs.map(c => ({
           col: c.col,
@@ -528,7 +612,16 @@ export function selectRound(state: GameState, round: RoundType): void {
   state.songTitle = '';
 
   state.roundType = round;
-  state.roundSongs = getSongsForRound(round);
+  // Honour config override for the round lineup (R1 / R3); fall back to hard-coded default.
+  // R1 "5 to 1" specifically plays exactly 5 songs, so the lineup is capped at 5 at runtime
+  // even if the host has a longer pool saved for variety across shows.
+  const overrideIds = state.config.roundLineups[round];
+  if (overrideIds && overrideIds.length > 0) {
+    const playable = round === '5to1' ? overrideIds.slice(0, 5) : overrideIds;
+    state.roundSongs = playable.map(id => getSongById(id)).filter((s): s is Song => !!s);
+  } else {
+    state.roundSongs = getSongsForRound(round);
+  }
   state.currentSongIndex = 0;
   state.phase = 'round-intro';
   state.buzzedPlayer = null;
@@ -562,7 +655,11 @@ export function selectRound(state: GameState, round: RoundType): void {
 
   // Round-specific setup
   if (round === 'another-level') {
-    state.anotherLevelSongConfigs = [...anotherLevelSongs];
+    // Apply config overrides per group (host may have picked different songs via /setup)
+    state.anotherLevelSongConfigs = anotherLevelSongs.map(cfg => ({
+      ...cfg,
+      songId: state.config.anotherLevelGroupSongs?.[cfg.group] ?? cfg.songId,
+    }));
     // Start on the board — host picks which group to play next.
     state.phase = 'another-level-board';
   }
@@ -655,9 +752,13 @@ export function loadSong(state: GameState, index: number): void {
       // Fewer instruments = harder to recognise = higher prize.
       const instrumentCount = Math.max(1, 5 - index);
       if (state.currentSong) {
-        state.activeStems = state.currentSong.stems
-          .slice(0, instrumentCount)
-          .map(s => s.id);
+        // Honour host's per-song stem-order arrangement (set via drag-drop on /setup).
+        // Falls back to the song's default stem order.
+        const override = state.config.stemOrderBySong?.[state.currentSong.id];
+        const orderedStems = override && override.length > 0
+          ? override.map(id => state.currentSong!.stems.find(s => s.id === id)).filter((s): s is NonNullable<typeof s> => !!s)
+          : state.currentSong.stems;
+        state.activeStems = orderedStems.slice(0, instrumentCount).map(s => s.id);
       }
       state.phase = 'playing';
       break;
@@ -685,8 +786,15 @@ export function loadSong(state: GameState, index: number): void {
       // Build partsColumnSongs from the 5-entry partsColumnQuestions config.
       const colSongs = partsColumnQuestions
         .map(q => {
-          const bundle = getPartsColumnSongs(q.col);
-          return bundle ? { col: q.col, target: bundle.target, decoys: bundle.decoys } : null;
+          const override = state.config.partsColumnOverrides?.[q.col];
+          const targetId = override?.targetSongId ?? q.targetSongId;
+          const d1Id = override?.decoy1SongId ?? q.decoySongIds[0];
+          const d2Id = override?.decoy2SongId ?? q.decoySongIds[1];
+          const target = getSongById(targetId);
+          const d1 = getSongById(d1Id);
+          const d2 = getSongById(d2Id);
+          if (!target || !d1 || !d2) return null;
+          return { col: q.col, target, decoys: [d1, d2] as [Song, Song] };
         })
         .filter((x): x is { col: number; target: Song; decoys: [Song, Song] } => !!x);
       state.partsColumnSongs = colSongs;
@@ -732,9 +840,12 @@ export function setStem(state: GameState, stemId: number, active: boolean): void
 
 // One-click "reveal the song" — writes the current song's title + artist to state.revealText
 // so the wall overlays it for everyone. No-op if no song is loaded.
+// R3: honour per-song title override (host can curate what the audience reads).
 export function revealSong(state: GameState): void {
   if (!state.currentSong) return;
-  state.revealText = `${state.currentSong.title} — ${state.currentSong.artist}`;
+  const override = state.config.musicAuctionOverrides?.[state.currentSong.id];
+  const title = (state.roundType === 'music-auction' && override?.title) || state.currentSong.title;
+  state.revealText = `${title} — ${state.currentSong.artist}`;
 }
 
 export function revealAll(state: GameState): number[] {
@@ -899,37 +1010,49 @@ function shuffled<T>(arr: readonly T[]): T[] {
 
 function setupAuctionOffers(state: GameState): void {
   if (!state.currentSong) return;
+  const song = state.currentSong;
 
   // Musician count -> prize ladder. 1 musician = $15k, 2 = $6k, 3 = $3k, 4 = $2k, 5 = $1k.
   const prizeLadder = [15000, 6000, 3000, 2000, 1000];
 
-  // Draw from the full stem pool so horns / perc / BVs / named LVs can join the auction.
-  // Skip "clue" stem — it's a lyrical hint, not a musician.
-  const primaryStems = state.currentSong.stems;
-  const extras = (state.currentSong.extraStems ?? []).filter(s => s.instrument !== 'Clue');
+  // Full available stem pool (skip "clue" — it's a lyric hint, not a musician).
+  const primaryStems = song.stems;
+  const extras = (song.extraStems ?? []).filter(s => s.instrument !== 'Clue');
+  const allStems = [...primaryStems, ...extras];
+  const allById = new Map(allStems.map(s => [s.id, s]));
 
-  // Rule: at most ONE vocal stem per auction (the 4 named LVs are alternate takes of the same
-  // part, so layering them would be musically nonsensical; same for mixing Primary Vocals + an LV).
-  // Treat any stem whose instrument name contains "vocal" as the vocal bucket.
-  const isVocal = (instrument: string) => instrument.toLowerCase().includes('vocal');
-  const vocalPool = [...primaryStems, ...extras].filter(s => isVocal(s.instrument));
-  const instrumentalPool = [...primaryStems, ...extras].filter(s => !isVocal(s.instrument));
+  let finalStems: Stem[];
 
-  const pickedStems: Stem[] = [];
-  // Pick 1 random vocal if any are available
-  if (vocalPool.length > 0) {
-    pickedStems.push(shuffled(vocalPool)[0]);
+  // PRIORITY: if the host has set a stem arrangement for this song via /setup,
+  // use it verbatim. Slot 1 → offer #1 ($15k / 1 musician), slot 2 → offer #2, etc.
+  const override = state.config.stemOrderBySong?.[song.id];
+  if (override && override.length > 0) {
+    const orderedStems: Stem[] = [];
+    for (const id of override) {
+      const stem = allById.get(id);
+      if (stem) orderedStems.push(stem);
+      if (orderedStems.length === 5) break;
+    }
+    // Pad from primary stems if arrangement was short
+    for (const s of primaryStems) {
+      if (orderedStems.length >= 5) break;
+      if (!orderedStems.some(p => p.id === s.id)) orderedStems.push(s);
+    }
+    finalStems = orderedStems.slice(0, 5);
+  } else {
+    // Fallback: randomised selection with "at most one vocal" rule
+    const isVocal = (instrument: string) => instrument.toLowerCase().includes('vocal');
+    const vocalPool = allStems.filter(s => isVocal(s.instrument));
+    const instrumentalPool = allStems.filter(s => !isVocal(s.instrument));
+    const pickedStems: Stem[] = [];
+    if (vocalPool.length > 0) pickedStems.push(shuffled(vocalPool)[0]);
+    pickedStems.push(...shuffled(instrumentalPool).slice(0, 5 - pickedStems.length));
+    let finalPicks = shuffled(pickedStems);
+    while (finalPicks.length < 5 && instrumentalPool.length > 0) {
+      finalPicks.push(instrumentalPool[finalPicks.length % instrumentalPool.length]);
+    }
+    finalStems = finalPicks.slice(0, 5);
   }
-  // Fill the remaining slots from the instrumental pool
-  pickedStems.push(...shuffled(instrumentalPool).slice(0, 5 - pickedStems.length));
-  // Final shuffle so the vocal isn't always in slot 0
-  let finalPicks = shuffled(pickedStems);
-
-  // Pad up to 5 if short (very rare: legacy song with <4 instrumentals)
-  while (finalPicks.length < 5 && instrumentalPool.length > 0) {
-    finalPicks.push(instrumentalPool[finalPicks.length % instrumentalPool.length]);
-  }
-  const finalStems = finalPicks.slice(0, 5);
 
   // Pick 5 distinct wall cells (1..15) for these offers — spread across the whole grid.
   const cellIds = shuffled(Array.from({ length: 15 }, (_, i) => i + 1)).slice(0, 5);

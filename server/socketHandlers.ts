@@ -36,6 +36,13 @@ import {
   partsTickCell,
   partsRevealForfeit,
   partsClearTimer,
+  setRoundLineup,
+  setAnotherLevelGroupSong,
+  setPartsColumnOverride,
+  setStemOrderForSong,
+  setAuctionOverride,
+  resetConfig,
+  importConfig,
 } from './gameState.js';
 
 // Track which sockets belong to which role
@@ -255,6 +262,50 @@ export function setupSocketHandlers(io: Server, state: GameState) {
     socket.on('host:reveal-song', () => {
       revealSong(state);
       broadcastState(io, state);
+    });
+
+    // ============================================
+    // SETUP / CONFIG EVENTS
+    // ============================================
+
+    socket.on('host:config-set-round-lineup', (data: { round: RoundType; songIds: string[] }) => {
+      setRoundLineup(state, data.round, data.songIds);
+      broadcastState(io, state);
+    });
+
+    socket.on('host:config-set-al-group-song', (data: { group: string; songId: string }) => {
+      setAnotherLevelGroupSong(state, data.group, data.songId);
+      broadcastState(io, state);
+    });
+
+    socket.on('host:config-set-parts-column', (data: { col: number; targetSongId: string; decoy1SongId: string; decoy2SongId: string }) => {
+      setPartsColumnOverride(state, data.col, data.targetSongId, data.decoy1SongId, data.decoy2SongId);
+      broadcastState(io, state);
+    });
+
+    socket.on('host:config-set-stem-order', (data: { songId: string; stemIds: number[] }) => {
+      setStemOrderForSong(state, data.songId, data.stemIds);
+      broadcastState(io, state);
+    });
+
+    socket.on('host:config-set-auction-override', (data: { songId: string; title?: string; genre?: string }) => {
+      setAuctionOverride(state, data.songId, data.title, data.genre);
+      broadcastState(io, state);
+    });
+
+    socket.on('host:config-reset', () => {
+      resetConfig(state);
+      broadcastState(io, state);
+    });
+
+    socket.on('host:config-import', (data: { json: string }) => {
+      try {
+        const parsed = JSON.parse(data.json);
+        importConfig(state, parsed);
+        broadcastState(io, state);
+      } catch (err) {
+        console.error('[config-import] invalid JSON:', err);
+      }
     });
 
     socket.on('host:reveal-all', () => {
