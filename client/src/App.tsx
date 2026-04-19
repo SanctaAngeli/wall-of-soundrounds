@@ -2,6 +2,7 @@ import { Component, type ReactNode } from 'react';
 import { WallScreen } from './screens/WallScreen';
 import { PlayerScreen } from './screens/PlayerScreen';
 import { HostScreen } from './screens/HostScreen';
+import { SetupScreen } from './screens/SetupScreen';
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null };
@@ -40,6 +41,10 @@ function App() {
     return <ErrorBoundary><HostScreen /></ErrorBoundary>;
   }
 
+  if (path.startsWith('/setup')) {
+    return <ErrorBoundary><SetupScreen /></ErrorBoundary>;
+  }
+
   // Default: Hub site
   const screens = [
     {
@@ -73,6 +78,14 @@ function App() {
       icon: '🟣',
       color: '#ff00aa',
       accent: '#cc0088',
+    },
+    {
+      href: '/setup',
+      label: 'SETUP / LIBRARY',
+      desc: 'Browse every song and stem in the library. Customise which songs play in each round. Export/import show configs.',
+      icon: '🎚️',
+      color: '#8b5cf6',
+      accent: '#6d28d9',
     },
   ];
 

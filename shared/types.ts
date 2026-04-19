@@ -201,6 +201,8 @@ export interface HostState {
   partsScatter?: { row: number; col: number; songIndex: 0 | 1 | 2 }[];
   // Per-column target + decoys (host-only info; shown in column picker)
   partsColumnSongs?: { col: number; targetTitle: string; targetArtist: string; decoyTitles: [string, string] }[];
+  // Current editable config — shown in /setup and used to drive round lineups at selection time
+  config?: GameConfig;
 }
 
 // ============================================
@@ -247,6 +249,14 @@ export interface ClientEvents {
   'host:set-stem': { stemId: number; active: boolean };
   // Reveal the current song's title + artist on the wall (all rounds)
   'host:reveal-song': {};
+  // Setup / library editor
+  'host:config-set-round-lineup': { round: RoundType; songIds: string[] };
+  'host:config-set-al-group-song': { group: string; songId: string };
+  'host:config-set-parts-column': { col: number; targetSongId: string; decoy1SongId: string; decoy2SongId: string };
+  'host:config-set-stem-order': { songId: string; stemIds: number[] };
+  'host:config-set-auction-override': { songId: string; title?: string; genre?: string };
+  'host:config-reset': {};
+  'host:config-import': { json: string };
   // Another Level
   'host:al-select-group': { group: string };
   'host:al-back-to-board': {};
@@ -320,4 +330,25 @@ export const ROUND_NAMES: Record<RoundType, string> = {
 
 export function formatMoney(amount: number): string {
   return '$' + amount.toLocaleString();
+}
+
+// ============================================
+// Setup / Song Library config — editable per-session via /setup route
+// ============================================
+// Each round holds an ordered song-id list that overrides the hard-coded defaults at runtime.
+// R2 and R4 have richer schemas (group→song, column→target+decoys) so their editors
+// serialise differently.
+export interface GameConfig {
+  // Simple ordered/unordered lineups (R1, R3)
+  roundLineups: Partial<Record<RoundType, string[]>>;
+  // R2: group-name → song-id override. Leaves instruments/prize from the default board.
+  anotherLevelGroupSongs?: Record<string, string>;
+  // R4: column index → {target, decoy1, decoy2}
+  partsColumnOverrides?: Record<number, { targetSongId: string; decoy1SongId: string; decoy2SongId: string }>;
+  // R1 "5 to 1" reveal order per song — [stemId, stemId, ...] left-to-right.
+  // Slot 1 plays alone in the 1-stem song; slots 1-2 play together in the 2-stem song; etc.
+  stemOrderBySong?: Record<string, number[]>;
+  // R3 "Music Auction" on-wall title/genre overrides per song (lets the host curate what the
+  // audience sees, e.g. rename "HUMBLE." to "RAP HIT" and genre "Hip-Hop" to "2010s")
+  musicAuctionOverrides?: Record<string, { title?: string; genre?: string }>;
 }

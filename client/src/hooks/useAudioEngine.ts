@@ -172,11 +172,19 @@ export function useAudioEngine() {
   const playInternal = useCallback(() => {
     const ctx = audioContextRef.current;
     if (!ctx || !isLoadedRef.current) return;
-    if (ctx.state === 'suspended') ctx.resume();
-
-    createAndStartSources(pausedAtRef.current);
-    setIsPlaying(true);
-    console.log('[AudioEngine] Playing');
+    // Safari requires ctx.resume() to settle before sources can actually produce output.
+    // If we call source.start() while the context is still 'suspended', playback silently
+    // fails. Await resume() before starting sources.
+    const start = () => {
+      createAndStartSources(pausedAtRef.current);
+      setIsPlaying(true);
+      console.log('[AudioEngine] Playing (ctx state=' + ctx.state + ')');
+    };
+    if (ctx.state === 'suspended') {
+      ctx.resume().then(start).catch(err => console.error('[AudioEngine] resume failed:', err));
+    } else {
+      start();
+    }
   }, [createAndStartSources]);
 
   const play = useCallback(() => {
@@ -262,18 +270,27 @@ export function useAudioEngine() {
     const ctx = initAudioContext();
     // Play three quick ascending beeps: C5, E5, G5
     const freqs = [523.25, 659.25, 783.99];
-    freqs.forEach((freq, i) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.value = freq;
-      gain.gain.setValueAtTime(0.3, ctx.currentTime + i * 0.15);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.15 + 0.3);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(ctx.currentTime + i * 0.15);
-      osc.stop(ctx.currentTime + i * 0.15 + 0.3);
-    });
+    const schedule = () => {
+      freqs.forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.3, ctx.currentTime + i * 0.15);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.15 + 0.3);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(ctx.currentTime + i * 0.15);
+        osc.stop(ctx.currentTime + i * 0.15 + 0.3);
+      });
+    };
+    // Safari keeps the context 'suspended' until resume() settles; scheduling oscillators
+    // before that produces silence. Await resume first.
+    if (ctx.state === 'suspended') {
+      ctx.resume().then(schedule).catch(err => console.error('[AudioEngine] test-tone resume failed:', err));
+    } else {
+      schedule();
+    }
   }, [initAudioContext]);
 
   // Handle audio commands from the server

@@ -1,0 +1,979 @@
+import { useState, useEffect, useCallback, useMemo, type ChangeEvent } from 'react';
+import { useSocket } from '../hooks/useSocket';
+import { useAudioEngine } from '../hooks/useAudioEngine';
+import type { Song, GameConfig, RoundType } from '@shared/types';
+
+// ===========================================================================
+// SetupScreen
+// Dedicated /setup route: browse the full song library, preview any song with
+// individual stem toggles, and customise which songs play in each round.
+// Config edits are sent via socket (server state); audio preview is LOCAL ONLY
+// (uses this page's own audio engine, no broadcast to wall/players).
+// ===========================================================================
+
+interface LibraryResponse {
+  songs: Song[];
+  defaults: {
+    roundLineups: Record<RoundType, string[]>;
+    anotherLevelGroups: { group: string; songId: string; instruments: string[]; prize: number }[];
+    partsColumns: { col: number; targetSongId: string; decoySongIds: [string, string] }[];
+  };
+}
+
+const COL_NAMES = ['Vocals', 'Guitar', 'Keys', 'Bass', 'Drums'];
+const ROUND_LABELS: Record<RoundType, string> = {
+  '5to1': '5 to 1',
+  'another-level': 'Another Level',
+  'music-auction': 'Music Auction',
+  'song-in-5-parts': 'Song in 5 Parts',
+};
+
+export function SetupScreen() {
+  const { connected, hostState, emit } = useSocket({ role: 'host' });
+  const audioEngine = useAudioEngine();
+
+  const [lib, setLib] = useState<LibraryResponse | null>(null);
+  const [search, setSearch] = useState('');
+  const [selected, setSelected] = useState<Song | null>(null);
+  const [activeStemIds, setActiveStemIds] = useState<Set<number>>(new Set());
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [activeRoundTab, setActiveRoundTab] = useState<RoundType>('5to1');
+  const [toast, setToast] = useState<string | null>(null);
+  const [audioUnlocked, setAudioUnlocked] = useState(false);
+  const [dragOverRound, setDragOverRound] = useState<RoundType | null>(null);
+  const [dragOverSlot, setDragOverSlot] = useState<number | null>(null);
+  const [showOnboarding, setShowOnboarding] = useState(() => {
+    try { return localStorage.getItem('wos_onboarding_seen') !== '1'; } catch { return true; }
+  });
+  const dismissOnboarding = () => {
+    try { localStorage.setItem('wos_onboarding_seen', '1'); } catch {}
+    setShowOnboarding(false);
+  };
+
+  // Explicit audio unlock — Safari stays suspended until a gesture explicitly resumes the context.
+  // Rather than relying on auto-unlock from the song click (which races the audio buffer load),
+  // we have a dedicated banner button the host taps first.
+  const unlockAudio = useCallback(() => {
+    const ctx = audioEngine.initAudioContext();
+    if (ctx.state === 'suspended') {
+      ctx.resume().then(() => setAudioUnlocked(true)).catch(err => console.error('[setup] unlock failed:', err));
+    } else {
+      setAudioUnlocked(true);
+    }
+  }, [audioEngine]);
+
+  const playTestTone = useCallback(() => {
+    audioEngine.initAudioContext();
+    audioEngine.handleAudioCommand({ action: 'test-tone' });
+    setAudioUnlocked(true);
+  }, [audioEngine]);
+
+  // Fetch full library on mount
+  useEffect(() => {
+    fetch('/api/library')
+      .then(r => r.json())
+      .then((data: LibraryResponse) => setLib(data))
+      .catch(err => console.error('[setup] failed to load library:', err));
+  }, []);
+
+  // Transient toast helper
+  const flash = useCallback((msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 2200);
+  }, []);
+
+  // -------- Sampler actions (LOCAL audio only) --------
+  // On song select: load every stem that exists and auto-play them all layered.
+  // Host can then toggle individual stems off to audition what's driving the track.
+  const loadSongForPreview = useCallback((song: Song) => {
+    // Ensure AudioContext is running — this click is a user gesture so Safari allows resume.
+    const ctx = audioEngine.initAudioContext();
+    if (ctx.state === 'suspended') ctx.resume();
+    setAudioUnlocked(true);
+
+    setSelected(song);
+    const allStems = [...song.stems, ...(song.extraStems ?? [])];
+    const allIds = new Set(allStems.map(s => s.id));
+    setActiveStemIds(allIds);
+    setIsPlaying(true);
+    audioEngine.handleAudioCommand({ action: 'load', songId: song.id, stems: allStems });
+    // These commands queue inside the audio engine until load completes, then replay.
+    for (const s of allStems) {
+      audioEngine.handleAudioCommand({ action: 'fade-in-stem', stemId: s.id, duration: 200 });
+    }
+    audioEngine.handleAudioCommand({ action: 'play' });
+  }, [audioEngine]);
+
+  const toggleStem = useCallback((stemId: number) => {
+    setActiveStemIds(prev => {
+      const next = new Set(prev);
+      if (next.has(stemId)) {
+        next.delete(stemId);
+        audioEngine.handleAudioCommand({ action: 'fade-out-stem', stemId, duration: 200 });
+      } else {
+        next.add(stemId);
+        audioEngine.handleAudioCommand({ action: 'fade-in-stem', stemId, duration: 200 });
+      }
+      return next;
+    });
+  }, [audioEngine]);
+
+  const playPause = useCallback(() => {
+    if (isPlaying) {
+      audioEngine.handleAudioCommand({ action: 'pause' });
+      setIsPlaying(false);
+    } else {
+      audioEngine.handleAudioCommand({ action: 'play' });
+      setIsPlaying(true);
+    }
+  }, [isPlaying, audioEngine]);
+
+  const stop = useCallback(() => {
+    audioEngine.handleAudioCommand({ action: 'stop' });
+    setIsPlaying(false);
+    setActiveStemIds(new Set());
+  }, [audioEngine]);
+
+  // -------- Config helpers (server-backed via socket) --------
+  const config: GameConfig = useMemo(() => {
+    return hostState?.config ?? { roundLineups: {}, anotherLevelGroupSongs: {}, partsColumnOverrides: {} };
+  }, [hostState]);
+
+  const resolveLineup = useCallback((round: RoundType): string[] => {
+    const override = config.roundLineups[round];
+    if (override && override.length > 0) return override;
+    return lib?.defaults.roundLineups[round] ?? [];
+  }, [config, lib]);
+
+  const setLineup = useCallback((round: RoundType, songIds: string[]) => {
+    emit('host:config-set-round-lineup', { round, songIds });
+  }, [emit]);
+
+  const addToRound = useCallback((round: RoundType, songId: string) => {
+    const current = resolveLineup(round);
+    if (current.includes(songId)) {
+      flash(`Already in ${ROUND_LABELS[round]}`);
+      return;
+    }
+    setLineup(round, [...current, songId]);
+    flash(`Added to ${ROUND_LABELS[round]}`);
+  }, [resolveLineup, setLineup, flash]);
+
+  const removeFromRound = useCallback((round: RoundType, index: number) => {
+    const current = resolveLineup(round);
+    setLineup(round, current.filter((_, i) => i !== index));
+  }, [resolveLineup, setLineup]);
+
+  const moveInRound = useCallback((round: RoundType, index: number, delta: -1 | 1) => {
+    const current = [...resolveLineup(round)];
+    const ni = index + delta;
+    if (ni < 0 || ni >= current.length) return;
+    [current[index], current[ni]] = [current[ni], current[index]];
+    setLineup(round, current);
+  }, [resolveLineup, setLineup]);
+
+  // R2: set per-group song
+  const setGroupSong = useCallback((group: string, songId: string) => {
+    emit('host:config-set-al-group-song', { group, songId });
+  }, [emit]);
+
+  // R4: set per-column target + decoys
+  const setColumn = useCallback((col: number, targetSongId: string, decoy1SongId: string, decoy2SongId: string) => {
+    emit('host:config-set-parts-column', { col, targetSongId, decoy1SongId, decoy2SongId });
+  }, [emit]);
+
+  // -------- Export / Import --------
+  const exportConfig = () => {
+    const json = JSON.stringify(config, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `wos-show-config-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    flash('Config downloaded');
+  };
+
+  const importConfigFile = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    file.text().then(text => {
+      try { JSON.parse(text); } catch { flash('Invalid JSON file'); return; }
+      emit('host:config-import', { json: text });
+      flash('Config imported');
+    });
+    e.target.value = '';
+  };
+
+  const resetAll = () => {
+    if (!confirm('Reset all custom song lineups back to defaults?')) return;
+    emit('host:config-reset');
+    flash('Config reset to defaults');
+  };
+
+  // -------- Filtered library --------
+  const filteredSongs = useMemo(() => {
+    if (!lib) return [];
+    const q = search.trim().toLowerCase();
+    if (!q) return lib.songs;
+    return lib.songs.filter(s =>
+      s.title.toLowerCase().includes(q) ||
+      s.artist.toLowerCase().includes(q) ||
+      (s.genre ?? '').toLowerCase().includes(q)
+    );
+  }, [lib, search]);
+
+  // -------- Look-up helpers --------
+  const songById = useCallback((id: string): Song | undefined =>
+    lib?.songs.find(s => s.id === id), [lib]);
+
+  // =======================================================================
+  // Render
+  // =======================================================================
+
+  if (!lib) {
+    return <div style={S.container}><div style={S.loading}>Loading song library…</div></div>;
+  }
+
+  return (
+    <div style={S.container}>
+      {/* First-time onboarding overlay — walks non-technical hosts through the main mechanics */}
+      {showOnboarding && (
+        <div style={S.onboardOverlay}>
+          <div style={S.onboardCard}>
+            <div style={{ fontSize: '0.7rem', color: '#8b5cf6', fontWeight: 900, letterSpacing: '0.2em', textTransform: 'uppercase', marginBottom: '4px' }}>
+              Welcome
+            </div>
+            <h2 style={{ fontSize: 'clamp(1.4rem, 3vw, 2rem)', margin: '0 0 12px 0', color: '#ffd700' }}>
+              This is your show setup
+            </h2>
+            <p style={S.onboardP}>
+              This page has every song the game knows about. Use it <em>before</em> you go live to choose
+              which songs play in each round, then save your setup as a file you can reload next time.
+            </p>
+
+            <div style={S.onboardStep}>
+              <div style={S.onboardBadge}>1</div>
+              <div>
+                <div style={S.onboardStepTitle}>Try a song</div>
+                <div style={S.onboardStepBody}>
+                  Click any song in the <strong>Library</strong> on the left — e.g. <em>Break My Heart</em> by Dua Lipa —
+                  and it'll play in the <strong>Sampler</strong> with every instrument layered. Click the instrument
+                  buttons to mute/unmute them. Only this tab makes noise — nothing goes to the wall or players.
+                </div>
+              </div>
+            </div>
+
+            <div style={S.onboardStep}>
+              <div style={S.onboardBadge}>2</div>
+              <div>
+                <div style={S.onboardStepTitle}>Put songs into rounds (drag + drop)</div>
+                <div style={S.onboardStepBody}>
+                  Grab a song from the library and drag it over to the <strong>Round Lineups</strong> panel on the right.
+                  A dashed outline will appear — drop it inside to add it. Pick the round tab at the top (5 to 1 /
+                  Music Auction / Song in 5 Parts) first.
+                </div>
+              </div>
+            </div>
+
+            <div style={S.onboardStep}>
+              <div style={S.onboardBadge}>3</div>
+              <div>
+                <div style={S.onboardStepTitle}>Save your show to a file (Export)</div>
+                <div style={S.onboardStepBody}>
+                  When you like your setup, click <strong>⤓ Export Config</strong> in the top right. Your browser
+                  downloads a small file to your Downloads folder. Keep it somewhere safe on your desktop — that's
+                  your show's memory.
+                </div>
+              </div>
+            </div>
+
+            <div style={S.onboardStep}>
+              <div style={S.onboardBadge}>4</div>
+              <div>
+                <div style={S.onboardStepTitle}>Load your show next time (Import)</div>
+                <div style={S.onboardStepBody}>
+                  The next time you open this page (or after the server has been restarted), all your custom settings
+                  will be reset. To bring them back, click <strong>⤒ Import Config</strong> and pick the file you saved
+                  earlier. Everything will be exactly how you left it.
+                </div>
+              </div>
+            </div>
+
+            <div style={{ fontSize: '0.72rem', color: '#8080a0', marginTop: '16px', fontStyle: 'italic' }}>
+              You can see this guide again by clearing your browser's site data for this site, or by asking your dev for help.
+            </div>
+
+            <button onClick={dismissOnboarding} style={{ ...S.btn, background: '#ffd700', color: '#000', width: '100%', padding: '14px', marginTop: '16px', fontSize: '0.95rem', fontWeight: 900 }}>
+              Got it — let's set up the show
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Top bar */}
+      <div style={S.topBar}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          <a href="/" style={S.backLink}>← Hub</a>
+          <h1 style={S.title}>🎚️ Setup & Library</h1>
+          <span style={{ color: connected ? '#00ff88' : '#ff4444', fontSize: '0.7rem' }}>
+            {connected ? '● connected' : '○ reconnecting'}
+          </span>
+        </div>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button onClick={playTestTone} style={{ ...S.btn, background: '#00ff88', color: '#000' }}>
+            🔔 Test Tone
+          </button>
+          <button onClick={exportConfig} style={{ ...S.btn, background: '#00d4ff', color: '#000' }}>
+            ⤓ Export Config
+          </button>
+          <label style={{ ...S.btn, background: '#ffd700', color: '#000', cursor: 'pointer' }}>
+            ⤒ Import Config
+            <input type="file" accept=".json,application/json" onChange={importConfigFile} style={{ display: 'none' }} />
+          </label>
+          <button onClick={resetAll} style={{ ...S.btn, background: '#440000', color: '#ff6666' }}>
+            Reset All
+          </button>
+        </div>
+      </div>
+
+      {/* Audio unlock banner — shown until the user taps to resume the AudioContext.
+          Safari suspends audio on tab load; the first click anywhere resumes it. */}
+      {!audioUnlocked && (
+        <button
+          onClick={unlockAudio}
+          style={{
+            width: '100%', padding: '12px 16px',
+            background: 'linear-gradient(90deg, #ffd70022, #ff8c0033, #ffd70022)',
+            border: 'none', borderBottom: '1px solid #ffd70066',
+            color: '#ffd700', fontSize: '0.9rem', fontWeight: 900,
+            fontFamily: 'Montserrat, sans-serif', letterSpacing: '0.1em', textTransform: 'uppercase',
+            cursor: 'pointer',
+          }}
+        >
+          🔊 Tap here to enable audio in this tab
+        </button>
+      )}
+
+      {/* How-to banner */}
+      <div style={S.helpBanner}>
+        <strong>How this works:</strong> Click any song on the left to load it in the sampler in the middle —
+        toggle individual stems to hear just the drums, just the keys, etc. Once you've found a song
+        that fits a round, use the buttons in the right panel to assign it. Audio here plays only on this
+        screen, not on the wall or players. When you're done, click <strong>Export Config</strong> to save
+        your show setup to a file — you'll need to <strong>Import Config</strong> again after any server
+        redeploy.
+      </div>
+
+      {/* Toast */}
+      {toast && (
+        <div style={S.toast}>{toast}</div>
+      )}
+
+      {/* 3-column layout */}
+      <div style={S.main}>
+
+        {/* ============ LEFT: Song library list ============ */}
+        <div style={S.col}>
+          <h2 style={S.colTitle}>Library ({filteredSongs.length}/{lib.songs.length})</h2>
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search title / artist / genre…"
+            style={S.search}
+          />
+          <div style={S.libraryList}>
+            {filteredSongs.map(song => {
+              const isSelected = selected?.id === song.id;
+              return (
+                <button
+                  key={song.id}
+                  onClick={() => loadSongForPreview(song)}
+                  draggable
+                  onDragStart={e => {
+                    e.dataTransfer.setData('application/x-wos-song', song.id);
+                    e.dataTransfer.effectAllowed = 'copy';
+                  }}
+                  style={{
+                    ...S.libraryItem,
+                    background: isSelected ? '#ffd70022' : '#1a1a3a',
+                    border: isSelected ? '1px solid #ffd700' : '1px solid #22223a',
+                    cursor: 'grab',
+                  }}
+                  title="Click to preview · Drag to a round on the right →"
+                >
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', minWidth: 0 }}>
+                    <span style={{ fontWeight: 800, color: isSelected ? '#ffd700' : '#fff', fontSize: '0.85rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {song.title}
+                    </span>
+                    <span style={{ color: '#8080a0', fontSize: '0.7rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {song.artist}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.62rem', color: '#606080' }}>
+                    <span>{song.year}</span>
+                    <span>·</span>
+                    <span>{song.genre ?? '—'}</span>
+                    <span>·</span>
+                    <span>{song.stems.length + (song.extraStems?.length ?? 0)} stems</span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* ============ CENTER: Sampler ============ */}
+        <div style={{ ...S.col, flex: '1 1 0' }}>
+          <h2 style={S.colTitle}>Sampler</h2>
+          <div style={S.colScroll}>
+          {!selected ? (
+            <div style={S.placeholder}>
+              Pick a song from the library on the left to start auditioning it.
+            </div>
+          ) : (
+            <>
+              <div style={S.selectedHeader}>
+                <div>
+                  <div style={{ fontSize: '1.3rem', fontWeight: 900, color: '#fff' }}>{selected.title}</div>
+                  <div style={{ color: '#a0a0b0', fontSize: '0.9rem' }}>{selected.artist} · {selected.year} · {selected.genre ?? '—'} · {selected.difficulty}</div>
+                </div>
+              </div>
+
+              <div style={S.transport}>
+                <button
+                  onClick={playPause}
+                  style={{ ...S.btn, background: isPlaying ? '#ff4444' : '#00ff88', color: '#000', flex: 1, padding: '14px' }}
+                >
+                  {isPlaying ? '⏸ PAUSE' : '▶ PLAY'}
+                </button>
+                <button onClick={stop} style={{ ...S.btn, background: '#333', color: '#fff', padding: '14px 20px' }}>
+                  ■ STOP
+                </button>
+              </div>
+
+              <div style={{ fontSize: '0.75rem', color: '#a0a0b0', margin: '10px 0 6px 0', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+                Primary stems ({selected.stems.length})
+              </div>
+              <div style={S.stemGrid}>
+                {selected.stems.map(stem => {
+                  const active = activeStemIds.has(stem.id);
+                  return (
+                    <button
+                      key={stem.id}
+                      onClick={() => toggleStem(stem.id)}
+                      draggable
+                      onDragStart={e => {
+                        e.dataTransfer.setData('application/x-wos-stem', String(stem.id));
+                        e.dataTransfer.effectAllowed = 'move';
+                      }}
+                      style={{
+                        ...S.stemBtn,
+                        background: active ? `${stem.color}33` : '#1a1a3a',
+                        borderColor: active ? stem.color : '#333',
+                        color: active ? stem.color : '#888',
+                        cursor: 'grab',
+                      }}
+                      title="Click to toggle · Drag into a slot below to set reveal order"
+                    >
+                      <span style={{ fontSize: '1.5rem', lineHeight: 1 }}>{stem.icon}</span>
+                      <span style={{ fontSize: '0.7rem', fontWeight: 700 }}>{stem.instrument}</span>
+                      <span style={{ fontSize: '0.55rem', color: '#555' }}>{stem.file}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {selected.extraStems && selected.extraStems.length > 0 && (
+                <>
+                  <div style={{ fontSize: '0.75rem', color: '#a0a0b0', margin: '14px 0 6px 0', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+                    Extra stems ({selected.extraStems.length})
+                  </div>
+                  <div style={S.stemGrid}>
+                    {selected.extraStems.map(stem => {
+                      const active = activeStemIds.has(stem.id);
+                      return (
+                        <button
+                          key={stem.id}
+                          onClick={() => toggleStem(stem.id)}
+                          draggable
+                          onDragStart={e => {
+                            e.dataTransfer.setData('application/x-wos-stem', String(stem.id));
+                            e.dataTransfer.effectAllowed = 'move';
+                          }}
+                          title="Click to toggle · Drag into a reveal-order slot below (replaces that slot's instrument)"
+                          style={{
+                            ...S.stemBtn,
+                            cursor: 'grab',
+                            background: active ? `${stem.color}33` : '#1a1a3a',
+                            borderColor: active ? stem.color : '#333',
+                            color: active ? stem.color : '#888',
+                          }}
+                        >
+                          <span style={{ fontSize: '1.5rem', lineHeight: 1 }}>{stem.icon}</span>
+                          <span style={{ fontSize: '0.7rem', fontWeight: 700 }}>{stem.instrument}</span>
+                          <span style={{ fontSize: '0.55rem', color: '#555' }}>{stem.file}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+
+              {/* 5-slot arrangement — drives the R1 "5 to 1" reveal order for this song.
+                  Slot 1 plays alone in the 1-stem song; slots 1-2 play together in 2-stem; etc.
+                  Drag primary stems from above into slots to reorder. */}
+              {(() => {
+                // Full stem pool for this song (primary + extras, minus the Clue stem which is a lyric hint).
+                const allStems = [...selected.stems, ...(selected.extraStems ?? []).filter(s => s.instrument !== 'Clue')];
+                const allStemById = new Map(allStems.map(s => [s.id, s]));
+                const defaultOrder = selected.stems.map(s => s.id); // default is still primary 5
+                const currentOrder = config.stemOrderBySong?.[selected.id] ?? defaultOrder;
+                // Ensure we have at least 5 in arrangement — pad from defaults if short
+                const order: number[] = [...currentOrder];
+                for (const id of defaultOrder) if (!order.includes(id) && order.length < 5) order.push(id);
+                const hasCustom = !!config.stemOrderBySong?.[selected.id];
+                const resetOrder = () => emit('host:config-set-stem-order', { songId: selected.id, stemIds: defaultOrder });
+                const dropStem = (slotIdx: number, stemId: number) => {
+                  if (!allStemById.has(stemId)) return; // song must actually have this stem
+                  const curr = [...order];
+                  const existing = curr.indexOf(stemId);
+                  if (existing !== -1) {
+                    // Swap: stem was already somewhere in the arrangement, swap with target slot
+                    [curr[existing], curr[slotIdx]] = [curr[slotIdx], curr[existing]];
+                  } else {
+                    // Stem is an extra not yet in the arrangement — replace whatever was in slotIdx
+                    curr[slotIdx] = stemId;
+                  }
+                  emit('host:config-set-stem-order', { songId: selected.id, stemIds: curr });
+                };
+                return (
+                  <div style={{ marginTop: '14px', padding: '10px', background: '#1a1a3a', borderRadius: '8px', border: '1px solid #8b5cf644' }}>
+                    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: '6px' }}>
+                      <div style={{ fontSize: '0.75rem', color: '#8b5cf6', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+                        Stem arrangement (5 to 1 · Music Auction)
+                      </div>
+                      {hasCustom && (
+                        <button onClick={resetOrder} style={{ ...S.btn, background: '#333', color: '#aaa', fontSize: '0.6rem', padding: '3px 8px' }}>
+                          Reset
+                        </button>
+                      )}
+                    </div>
+                    <div style={{ fontSize: '0.65rem', color: '#8080a0', marginBottom: '8px', fontStyle: 'italic' }}>
+                      Drag any stem (primary or extra) into a slot. <strong>5 to 1:</strong> slot 1 is what plays alone in the 1-stem song. <strong>Music Auction:</strong> slot 1 is the first offer ($15k), slot 5 is the last ($1k).
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '6px' }}>
+                      {order.slice(0, 5).map((stemId, i) => {
+                        const stem = allStemById.get(stemId);
+                        const isHot = dragOverSlot === i;
+                        return (
+                          <div
+                            key={i}
+                            onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOverSlot(i); }}
+                            onDragLeave={() => setDragOverSlot(null)}
+                            onDrop={e => {
+                              e.preventDefault();
+                              setDragOverSlot(null);
+                              const raw = e.dataTransfer.getData('application/x-wos-stem');
+                              if (raw) dropStem(i, Number(raw));
+                            }}
+                            style={{
+                              padding: '6px 4px', borderRadius: '6px', textAlign: 'center',
+                              background: isHot ? '#8b5cf633' : '#0a0a1a',
+                              border: `2px dashed ${isHot ? '#8b5cf6' : stem ? (stem.color + '66') : '#333'}`,
+                              minHeight: '64px', display: 'flex', flexDirection: 'column',
+                              alignItems: 'center', justifyContent: 'center', gap: '2px',
+                              transition: 'all 0.15s',
+                            }}
+                          >
+                            <div style={{ fontSize: '0.55rem', fontWeight: 800, color: '#8b5cf6', letterSpacing: '0.1em' }}>
+                              SLOT {i + 1}
+                            </div>
+                            {stem ? (
+                              <>
+                                <div style={{ fontSize: '1.3rem', lineHeight: 1 }}>{stem.icon}</div>
+                                <div style={{ fontSize: '0.55rem', fontWeight: 700, color: stem.color, textTransform: 'uppercase' }}>
+                                  {stem.instrument}
+                                </div>
+                              </>
+                            ) : (
+                              <div style={{ fontSize: '0.6rem', color: '#444', fontStyle: 'italic' }}>drop here</div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Quick-add — R1/R3 only (simple ordered/pool lineups). R2/R4 need their own editors. */}
+              <div style={{ marginTop: '14px', padding: '10px', background: '#1a1a3a', borderRadius: '8px' }}>
+                <div style={{ fontSize: '0.7rem', color: '#a0a0b0', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: '6px' }}>
+                  Quick add to round
+                </div>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                  <button onClick={() => addToRound('5to1', selected.id)} style={{ ...S.btn, background: '#8b5cf6', color: '#fff', fontSize: '0.7rem', padding: '6px 10px' }}>
+                    + 5 to 1
+                  </button>
+                  <button onClick={() => addToRound('music-auction', selected.id)} style={{ ...S.btn, background: '#8b5cf6', color: '#fff', fontSize: '0.7rem', padding: '6px 10px' }}>
+                    + Music Auction
+                  </button>
+                  <span style={{ fontSize: '0.65rem', color: '#606080', alignSelf: 'center' }}>
+                    (R2 & R4 use the per-group / per-column pickers on the right →)
+                  </span>
+                </div>
+              </div>
+            </>
+          )}
+          </div> {/* end sampler colScroll */}
+        </div>
+
+        {/* ============ RIGHT: Round editors ============ */}
+        <div style={S.col}>
+          <h2 style={S.colTitle}>Round Lineups</h2>
+          <div style={{ display: 'flex', gap: '3px', marginBottom: '10px', flexWrap: 'wrap' }}>
+            {(Object.keys(ROUND_LABELS) as RoundType[]).map(r => (
+              <button
+                key={r}
+                onClick={() => setActiveRoundTab(r)}
+                style={{
+                  flex: 1, padding: '8px 6px', borderRadius: '6px', border: 'none',
+                  background: activeRoundTab === r ? '#ffd700' : '#1a1a3a',
+                  color: activeRoundTab === r ? '#000' : '#a0a0b0',
+                  fontWeight: 900, fontSize: '0.65rem', letterSpacing: '0.05em',
+                  textTransform: 'uppercase', cursor: 'pointer',
+                }}
+              >
+                {ROUND_LABELS[r]}
+              </button>
+            ))}
+          </div>
+
+          {/* Scrollable content area so R4's 5 columns editor fits without clipping */}
+          <div style={S.colScroll}>
+
+          {/* Simple ordered lineup editors (R1, R3) — drop-zone for songs dragged from the library */}
+          {(activeRoundTab === '5to1' || activeRoundTab === 'music-auction') && (() => {
+            const round = activeRoundTab;
+            const ids = resolveLineup(round);
+            const hasOverride = !!config.roundLineups[round];
+            const maxPlayed = round === '5to1' ? 5 : ids.length;
+            const isHot = dragOverRound === round;
+            return (
+              <div
+                onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setDragOverRound(round); }}
+                onDragLeave={() => setDragOverRound(null)}
+                onDrop={e => {
+                  e.preventDefault();
+                  setDragOverRound(null);
+                  const songId = e.dataTransfer.getData('application/x-wos-song');
+                  if (songId) addToRound(round, songId);
+                }}
+                style={{
+                  padding: '12px', borderRadius: '8px',
+                  // Big drop target: tall enough that dropping in empty space well below items still lands here.
+                  minHeight: '560px',
+                  background: isHot ? '#ffd70015' : '#0a0a1a40',
+                  border: isHot ? '2px dashed #ffd700' : '2px dashed #22223a',
+                  transition: 'background 0.15s, border 0.15s',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: '6px' }}>
+                  <div style={{ fontSize: '0.72rem', color: '#a0a0b0', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                    {round === '5to1'
+                      ? `${ids.length} songs — first 5 play (song 1 = 5 stems, song 5 = 1 stem)`
+                      : `${ids.length} songs in pool`}
+                  </div>
+                  {hasOverride && (
+                    <button
+                      onClick={() => setLineup(round, lib.defaults.roundLineups[round] ?? [])}
+                      style={{ ...S.btn, background: '#333', color: '#aaa', fontSize: '0.65rem', padding: '4px 8px' }}
+                    >
+                      Revert
+                    </button>
+                  )}
+                </div>
+                <div style={{ fontSize: '0.68rem', color: '#8b5cf6', fontWeight: 700, marginBottom: '6px', fontStyle: 'italic' }}>
+                  💡 Drag songs from the library on the left into this box to add them.
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  {ids.length === 0 && (
+                    <div style={S.placeholder}>Lineup empty — drag a song here or use Quick Add in the sampler.</div>
+                  )}
+                  {ids.map((id, i) => {
+                    const song = songById(id);
+                    const isAlternate = round === '5to1' && i >= maxPlayed;
+                    return (
+                      <div key={`${id}-${i}`} style={{ ...S.lineupItem, opacity: isAlternate ? 0.5 : 1 }}>
+                        <span style={{ fontWeight: 800, color: isAlternate ? '#666' : '#ffd700', minWidth: '22px' }}>{i + 1}</span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ color: '#fff', fontSize: '0.8rem', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {song?.title ?? id}
+                            {isAlternate && <span style={{ color: '#8080a0', fontSize: '0.6rem', marginLeft: '6px' }}>(alternate)</span>}
+                          </div>
+                          <div style={{ color: '#8080a0', fontSize: '0.65rem' }}>{song?.artist ?? '(missing)'}</div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '2px' }}>
+                          <button onClick={() => moveInRound(round, i, -1)} disabled={i === 0} style={S.moveBtn}>▲</button>
+                          <button onClick={() => moveInRound(round, i, 1)} disabled={i === ids.length - 1} style={S.moveBtn}>▼</button>
+                          <button onClick={() => removeFromRound(round, i)} style={{ ...S.moveBtn, color: '#ff6666' }}>✕</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* R3: title/genre overrides per song in the auction pool */}
+          {activeRoundTab === 'music-auction' && (() => {
+            const ids = resolveLineup('music-auction');
+            if (ids.length === 0) return null;
+            return (
+              <div style={{ marginTop: '14px' }}>
+                <div style={{ fontSize: '0.72rem', color: '#a0a0b0', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '6px' }}>
+                  Wall display overrides (optional)
+                </div>
+                <div style={{ fontSize: '0.65rem', color: '#8080a0', marginBottom: '8px', fontStyle: 'italic' }}>
+                  Rename how a song is shown to the audience. Leave blank to use the real title/genre.
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {ids.map((id) => {
+                    const song = songById(id);
+                    if (!song) return null;
+                    const override = config.musicAuctionOverrides?.[id] ?? {};
+                    return (
+                      <div key={id} style={{ ...S.lineupItem, flexDirection: 'column', alignItems: 'stretch', gap: '4px' }}>
+                        <div style={{ fontSize: '0.75rem', color: '#fff', fontWeight: 700 }}>
+                          {song.title} <span style={{ color: '#8080a0', fontSize: '0.65rem', fontWeight: 400 }}>— {song.artist}</span>
+                        </div>
+                        <input
+                          defaultValue={override.title ?? ''}
+                          placeholder={`Display title (default: ${song.title})`}
+                          onBlur={e => emit('host:config-set-auction-override', { songId: id, title: e.target.value.trim() || undefined })}
+                          style={S.select}
+                        />
+                        <input
+                          defaultValue={override.genre ?? ''}
+                          placeholder={`Display genre (default: ${song.genre ?? '—'})`}
+                          onBlur={e => emit('host:config-set-auction-override', { songId: id, genre: e.target.value.trim() || undefined })}
+                          style={S.select}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* R2: per-group song picker */}
+          {activeRoundTab === 'another-level' && (
+            <div>
+              <div style={{ fontSize: '0.72rem', color: '#a0a0b0', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '8px' }}>
+                9 board groups — each plays a specific instrument combo
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {lib.defaults.anotherLevelGroups.map(g => {
+                  const currentId = config.anotherLevelGroupSongs?.[g.group] ?? g.songId;
+                  const song = songById(currentId);
+                  return (
+                    <div key={g.group} style={{ ...S.lineupItem, flexDirection: 'column', alignItems: 'stretch', gap: '4px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem' }}>
+                        <span style={{ color: '#ffd700', fontWeight: 900, textTransform: 'uppercase' }}>{g.group}</span>
+                        <span style={{ color: '#a0a0b0' }}>{g.instruments.join('+')} · ${g.prize}</span>
+                      </div>
+                      <select
+                        value={currentId}
+                        onChange={e => setGroupSong(g.group, e.target.value)}
+                        style={S.select}
+                      >
+                        {lib.songs.map(s => (
+                          <option key={s.id} value={s.id}>{s.title} — {s.artist}</option>
+                        ))}
+                      </select>
+                      <div style={{ color: '#8080a0', fontSize: '0.65rem' }}>→ {song?.title ?? '(missing)'}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* R4: per-column target + decoys */}
+          {activeRoundTab === 'song-in-5-parts' && (
+            <div>
+              <div style={{ fontSize: '0.72rem', color: '#a0a0b0', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '8px' }}>
+                5 columns — each has its own target song + 2 decoys
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {[0, 1, 2, 3, 4].map(col => {
+                  const def = lib.defaults.partsColumns.find(c => c.col === col);
+                  if (!def) return null;
+                  const override = config.partsColumnOverrides?.[col];
+                  const targetId = override?.targetSongId ?? def.targetSongId;
+                  const d1Id = override?.decoy1SongId ?? def.decoySongIds[0];
+                  const d2Id = override?.decoy2SongId ?? def.decoySongIds[1];
+                  const apply = (t: string, d1: string, d2: string) => setColumn(col, t, d1, d2);
+                  return (
+                    <div key={col} style={{ padding: '10px', background: '#1a1a3a', borderRadius: '8px', border: '1px solid #333' }}>
+                      <div style={{ color: '#ffd700', fontWeight: 900, fontSize: '0.75rem', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: '6px' }}>
+                        Col {col + 1} · {COL_NAMES[col]}
+                      </div>
+                      <label style={S.label}>🎯 Target (the song to find)</label>
+                      <select value={targetId} onChange={e => apply(e.target.value, d1Id, d2Id)} style={S.select}>
+                        {lib.songs.map(s => <option key={s.id} value={s.id}>{s.title} — {s.artist}</option>)}
+                      </select>
+                      <label style={S.label}>Decoy 1</label>
+                      <select value={d1Id} onChange={e => apply(targetId, e.target.value, d2Id)} style={S.select}>
+                        {lib.songs.map(s => <option key={s.id} value={s.id}>{s.title} — {s.artist}</option>)}
+                      </select>
+                      <label style={S.label}>Decoy 2</label>
+                      <select value={d2Id} onChange={e => apply(targetId, d1Id, e.target.value)} style={S.select}>
+                        {lib.songs.map(s => <option key={s.id} value={s.id}>{s.title} — {s.artist}</option>)}
+                      </select>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          </div> {/* end colScroll */}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ===========================================================================
+// Styles
+// ===========================================================================
+const S: Record<string, React.CSSProperties> = {
+  container: {
+    width: '100vw', height: '100vh',
+    background: '#0a0a1a', color: '#fff',
+    fontFamily: 'Montserrat, sans-serif',
+    display: 'flex', flexDirection: 'column', overflow: 'hidden',
+  },
+  loading: {
+    width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+    color: '#ffd700', fontSize: '1.2rem', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase',
+  },
+  topBar: {
+    padding: '10px 16px', background: '#12122a', borderBottom: '1px solid #222',
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+  },
+  title: { fontSize: '1.2rem', fontWeight: 900, margin: 0, color: '#ffd700', letterSpacing: '0.05em' },
+  backLink: { color: '#8b5cf6', textDecoration: 'none', fontWeight: 700, fontSize: '0.85rem' },
+  btn: {
+    padding: '8px 14px', borderRadius: '6px', border: 'none',
+    fontFamily: 'Montserrat, sans-serif', fontWeight: 800, fontSize: '0.75rem',
+    letterSpacing: '0.05em', cursor: 'pointer',
+  },
+  helpBanner: {
+    padding: '10px 16px', background: '#8b5cf615', borderBottom: '1px solid #8b5cf640',
+    fontSize: '0.78rem', color: '#c0c0e0', lineHeight: 1.5,
+  },
+  toast: {
+    position: 'fixed', bottom: '20px', left: '50%', transform: 'translateX(-50%)',
+    background: '#ffd700', color: '#000', padding: '10px 24px', borderRadius: '8px',
+    fontWeight: 900, fontSize: '0.85rem', letterSpacing: '0.05em', zIndex: 1000,
+    boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
+  },
+  main: {
+    flex: 1, display: 'flex', gap: '1px', background: '#222', overflow: 'hidden',
+  },
+  col: {
+    display: 'flex', flexDirection: 'column',
+    background: '#0a0a1a', padding: '12px',
+    width: '340px', minWidth: '300px', overflow: 'hidden',
+  },
+  colScroll: { flex: 1, overflowY: 'auto', paddingRight: '4px', minHeight: 0 },
+  colTitle: { fontSize: '0.9rem', fontWeight: 900, margin: '0 0 10px 0', color: '#a0a0b0', letterSpacing: '0.1em', textTransform: 'uppercase' },
+  search: {
+    padding: '8px 12px', borderRadius: '6px', border: '1px solid #333',
+    background: '#1a1a3a', color: '#fff', fontFamily: 'Montserrat', fontSize: '0.85rem',
+    marginBottom: '8px', outline: 'none',
+  },
+  libraryList: {
+    flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '3px',
+  },
+  libraryItem: {
+    padding: '8px 10px', borderRadius: '6px', cursor: 'pointer',
+    textAlign: 'left', color: '#fff',
+    display: 'flex', flexDirection: 'column', gap: '2px',
+    fontFamily: 'Montserrat', transition: 'all 0.15s',
+  },
+  selectedHeader: {
+    padding: '10px 12px', background: '#1a1a3a', borderRadius: '8px', border: '1px solid #ffd70044',
+    marginBottom: '10px',
+  },
+  transport: { display: 'flex', gap: '6px' },
+  stemGrid: {
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(90px, 1fr))', gap: '6px',
+  },
+  stemBtn: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+    padding: '10px 6px', borderRadius: '8px', border: '2px solid', cursor: 'pointer',
+    gap: '3px', fontFamily: 'Montserrat', transition: 'all 0.15s',
+  },
+  placeholder: {
+    padding: '20px', color: '#606080', fontStyle: 'italic', fontSize: '0.85rem', textAlign: 'center',
+    background: '#0d0d1a', borderRadius: '6px', border: '1px dashed #333',
+  },
+  lineupItem: {
+    display: 'flex', alignItems: 'center', gap: '8px',
+    padding: '8px 10px', background: '#1a1a3a', borderRadius: '6px', border: '1px solid #333',
+    fontSize: '0.8rem',
+  },
+  moveBtn: {
+    background: '#333', border: 'none', color: '#ccc', padding: '4px 6px', borderRadius: '4px',
+    cursor: 'pointer', fontSize: '0.7rem', minWidth: '22px',
+  },
+  select: {
+    width: '100%', padding: '6px 8px', background: '#0a0a1a', color: '#fff',
+    border: '1px solid #333', borderRadius: '4px', fontFamily: 'Montserrat', fontSize: '0.75rem',
+    outline: 'none',
+  },
+  label: {
+    display: 'block', fontSize: '0.65rem', color: '#a0a0b0', fontWeight: 700,
+    letterSpacing: '0.05em', textTransform: 'uppercase', marginTop: '6px', marginBottom: '3px',
+  },
+  onboardOverlay: {
+    position: 'fixed', inset: 0, zIndex: 2000,
+    background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(8px)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px',
+    overflow: 'auto',
+  },
+  onboardCard: {
+    background: 'linear-gradient(180deg, #1a1a3a, #0a0a1a)',
+    border: '2px solid #8b5cf6', borderRadius: '16px',
+    padding: 'clamp(20px, 3vw, 32px)',
+    maxWidth: '640px', width: '100%',
+    boxShadow: '0 0 60px #8b5cf650, 0 0 120px #8b5cf620',
+    color: '#fff',
+  },
+  onboardP: {
+    fontSize: '0.95rem', lineHeight: 1.5, color: '#c0c0e0', margin: '0 0 20px 0',
+  },
+  onboardStep: {
+    display: 'flex', gap: '14px', marginBottom: '14px', alignItems: 'flex-start',
+  },
+  onboardBadge: {
+    minWidth: '32px', height: '32px',
+    background: '#8b5cf6', color: '#fff',
+    borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+    fontWeight: 900, fontSize: '1rem',
+  },
+  onboardStepTitle: {
+    fontSize: '1rem', fontWeight: 900, color: '#ffd700', marginBottom: '4px',
+  },
+  onboardStepBody: {
+    fontSize: '0.82rem', color: '#c0c0e0', lineHeight: 1.5,
+  },
+};
