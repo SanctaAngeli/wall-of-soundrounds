@@ -1,5 +1,5 @@
 import type { Server, Socket } from 'socket.io';
-import type { AudioCommand, RoundType, Stem } from '../shared/types.js';
+import type { AudioCommand, PlayerId, RoundType, Stem } from '../shared/types.js';
 import { namespaceStemId } from './gameState.js';
 import {
   GameState,
@@ -41,14 +41,31 @@ import {
   setPartsColumnOverride,
   setStemOrderForSong,
   setAuctionOverride,
+  setSongYearOverride,
+  setShowdownLineup,
+  setWtwLineup,
   resetConfig,
   importConfig,
+  // Song Showdown
+  showdownPickYear,
+  showdownAdvanceTier,
+  showdownNextSong,
+  showdownClearTimer,
+  showdownLadder,
+  // Win the Wall
+  wtwStartSong,
+  wtwAdvanceMusician,
+  wtwSkipSong,
+  wtwAcceptWalkaway,
+  wtwDeclineWalkaway,
+  wtwSetSurvivor,
+  wtwClearTimer,
 } from './gameState.js';
 
 // Track which sockets belong to which role
 interface SocketMeta {
   role: 'wall' | 'player' | 'host';
-  playerId?: 1 | 2;
+  playerId?: PlayerId;
 }
 
 const socketMeta = new Map<string, SocketMeta>();
@@ -58,12 +75,14 @@ function broadcastState(io: Server, state: GameState) {
   const wallState = deriveWallState(state);
   const player1State = derivePlayerState(state, 1);
   const player2State = derivePlayerState(state, 2);
+  const player3State = derivePlayerState(state, 3);
   const hostState = deriveHostState(state);
 
   // Send to each room
   io.to('wall').emit('wall:state', wallState);
   io.to('player-1').emit('player:state', player1State);
   io.to('player-2').emit('player:state', player2State);
+  io.to('player-3').emit('player:state', player3State);
   io.to('host').emit('host:state', hostState);
 }
 
@@ -117,12 +136,13 @@ export function setupSocketHandlers(io: Server, state: GameState) {
     socket.on('register', (data: { role: string; playerId?: number }) => {
       const meta: SocketMeta = { role: data.role as 'wall' | 'player' | 'host' };
 
-      if (data.role === 'player' && data.playerId) {
-        meta.playerId = data.playerId as 1 | 2;
+      if (data.role === 'player' && (data.playerId === 1 || data.playerId === 2 || data.playerId === 3)) {
+        meta.playerId = data.playerId;
         socket.join(`player-${data.playerId}`);
         state.players[meta.playerId].connected = true;
         if (meta.playerId === 1) state.connections.player1 = true;
         if (meta.playerId === 2) state.connections.player2 = true;
+        if (meta.playerId === 3) state.connections.player3 = true;
         console.log(`  -> Registered as Player ${data.playerId}`);
       } else if (data.role === 'wall') {
         socket.join('wall');
@@ -143,7 +163,7 @@ export function setupSocketHandlers(io: Server, state: GameState) {
     // PLAYER EVENTS
     // ============================================
 
-    socket.on('player:buzz', (data: { playerId: 1 | 2 }) => {
+    socket.on('player:buzz', (data: { playerId: PlayerId }) => {
       const success = playerBuzz(state, data.playerId);
       if (success) {
         // Stop audio on buzz
@@ -154,7 +174,7 @@ export function setupSocketHandlers(io: Server, state: GameState) {
       }
     });
 
-    socket.on('player:set-name', (data: { playerId: 1 | 2; name: string }) => {
+    socket.on('player:set-name', (data: { playerId: PlayerId; name: string }) => {
       setPlayerName(state, data.playerId, data.name);
       broadcastState(io, state);
     });
@@ -190,6 +210,9 @@ export function setupSocketHandlers(io: Server, state: GameState) {
     });
 
     socket.on('host:load-song', (data: { songIndex: number }) => {
+      // Showdown + WTW don't use index-based song loading — ignore to avoid scrambling
+      // their per-round state (showdown picks by year, WTW snakes through its lineup).
+      if (state.roundType === 'song-showdown' || state.roundType === 'win-the-wall') return;
       loadSong(state, data.songIndex);
       if (state.roundType === 'song-in-5-parts') {
         sendPartsLoadCommand(io, state);
@@ -293,6 +316,21 @@ export function setupSocketHandlers(io: Server, state: GameState) {
       broadcastState(io, state);
     });
 
+    socket.on('host:config-set-song-year', (data: { songId: string; year: number | null }) => {
+      setSongYearOverride(state, data.songId, data.year);
+      broadcastState(io, state);
+    });
+
+    socket.on('host:config-set-showdown-lineup', (data: { songIds: string[] }) => {
+      setShowdownLineup(state, data.songIds);
+      broadcastState(io, state);
+    });
+
+    socket.on('host:config-set-wtw-lineup', (data: { songIds: string[] }) => {
+      setWtwLineup(state, data.songIds);
+      broadcastState(io, state);
+    });
+
     socket.on('host:config-reset', () => {
       resetConfig(state);
       broadcastState(io, state);
@@ -322,6 +360,15 @@ export function setupSocketHandlers(io: Server, state: GameState) {
       if (state.roundType === 'song-in-5-parts') {
         sendAudioCommand(io, { action: 'pause' });
       }
+      // Song Showdown: song resolved — audio stops, host presses "Next Song" to rotate years.
+      if (state.roundType === 'song-showdown') {
+        sendAudioCommand(io, { action: 'pause' });
+      }
+      // Win the Wall: full wall mix plays on correct (wtwMarkCorrect already sets activeStems).
+      // At gate → phase is wtw-walkaway-offer, music continues. At jackpot → phase is wtw-gold.
+      if (state.roundType === 'win-the-wall') {
+        sendAudioCommand(io, { action: 'fade-all-in', duration: 400 });
+      }
       broadcastState(io, state);
     });
 
@@ -334,6 +381,59 @@ export function setupSocketHandlers(io: Server, state: GameState) {
         if (stemId != null) {
           sendAudioCommand(io, { action: 'fade-in-stem', stemId, duration: 200 });
         }
+      }
+      // Song Showdown: buzzer locked out of song, ticker resumes. Restart the 5s interval.
+      if (state.roundType === 'song-showdown' && state.phase === 'playing') {
+        sendAudioCommand(io, { action: 'play' });
+        for (const sid of state.activeStems) {
+          sendAudioCommand(io, { action: 'fade-in-stem', stemId: sid, duration: 200 });
+        }
+        // Restart ticker (handler closure captures startShowdownTicker — but this mark-wrong
+        // lives outside that closure). Call the gameState helper + kick off the timer inline.
+        showdownClearTimer(state);
+        state.showdownTimerInterval = setInterval(() => {
+          if (state.roundType !== 'song-showdown' || state.phase !== 'playing') {
+            showdownClearTimer(state);
+            return;
+          }
+          const stemId = showdownAdvanceTier(state);
+          if (stemId != null) sendAudioCommand(io, { action: 'fade-in-stem', stemId, duration: 400 });
+          broadcastState(io, state);
+        }, 5000);
+      }
+      // Win the Wall: music resumes at same cell (same cumulative stack). Restart snake ticker.
+      if (state.roundType === 'win-the-wall' && state.phase === 'wtw-playing') {
+        sendAudioCommand(io, { action: 'play' });
+        for (const sid of state.activeStems) {
+          sendAudioCommand(io, { action: 'fade-in-stem', stemId: sid, duration: 200 });
+        }
+        wtwClearTimer(state);
+        state.wtwTimerInterval = setInterval(() => {
+          if (state.roundType !== 'win-the-wall' || state.phase !== 'wtw-playing') {
+            wtwClearTimer(state);
+            return;
+          }
+          const { stemId, autoSkipped, bust } = wtwAdvanceMusician(state);
+          if (bust) {
+            sendAudioCommand(io, { action: 'stop' });
+            wtwClearTimer(state);
+          } else if (autoSkipped) {
+            sendAudioCommand(io, { action: 'fade-all-out', duration: 300 });
+            setTimeout(() => {
+              sendAudioCommand(io, { action: 'stop' });
+              if (state.currentSong) {
+                sendAudioCommand(io, { action: 'load', songId: state.currentSong.id, stems: state.currentSong.stems });
+                setTimeout(() => {
+                  sendAudioCommand(io, { action: 'play' });
+                  for (const sid of state.activeStems) sendAudioCommand(io, { action: 'fade-in-stem', stemId: sid, duration: 300 });
+                }, 200);
+              }
+            }, 320);
+          } else if (stemId != null) {
+            sendAudioCommand(io, { action: 'fade-in-stem', stemId, duration: 500 });
+          }
+          broadcastState(io, state);
+        }, 5000);
       }
       broadcastState(io, state);
     });
@@ -358,6 +458,29 @@ export function setupSocketHandlers(io: Server, state: GameState) {
     });
 
     socket.on('host:next-song', () => {
+      // Showdown + WTW have their own dedicated advance events — generic next-song would
+      // scramble currentSongIndex and corrupt the state.
+      if (state.roundType === 'song-showdown') {
+        sendAudioCommand(io, { action: 'stop' });
+        showdownNextSong(state);
+        broadcastState(io, state);
+        return;
+      }
+      if (state.roundType === 'win-the-wall') {
+        // Treat as a "skip" — burns 5 musicians and moves on (WTW has no manual next outside of this)
+        sendAudioCommand(io, { action: 'fade-all-out', duration: 300 });
+        wtwSkipSong(state);
+        if (state.phase === 'wtw-playing' && state.currentSong) {
+          sendAudioCommand(io, { action: 'load', songId: state.currentSong.id, stems: state.currentSong.stems });
+          setTimeout(() => {
+            sendAudioCommand(io, { action: 'play' });
+            for (const sid of state.activeStems) sendAudioCommand(io, { action: 'fade-in-stem', stemId: sid, duration: 300 });
+            broadcastState(io, state);
+          }, 200);
+        }
+        broadcastState(io, state);
+        return;
+      }
       sendAudioCommand(io, { action: 'stop' });
       auctionClearTimer(state);
       const hasMore = nextSong(state);
@@ -375,7 +498,7 @@ export function setupSocketHandlers(io: Server, state: GameState) {
       broadcastState(io, state);
     });
 
-    socket.on('host:adjust-score', (data: { player: 1 | 2; delta: number }) => {
+    socket.on('host:adjust-score', (data: { player: PlayerId; delta: number }) => {
       adjustScore(state, data.player, data.delta);
       broadcastState(io, state);
     });
@@ -574,6 +697,174 @@ export function setupSocketHandlers(io: Server, state: GameState) {
     });
 
     // ============================================
+    // SONG SHOWDOWN EVENTS
+    // ============================================
+    // Ticker: every 5s fade the next stem in + drop the prize tier. Kicked off when a year is
+    // picked, cleared on buzz / correct / wrong / next-song.
+    const startShowdownTicker = () => {
+      showdownClearTimer(state);
+      state.showdownTimerInterval = setInterval(() => {
+        if (state.roundType !== 'song-showdown' || state.phase !== 'playing') {
+          showdownClearTimer(state);
+          return;
+        }
+        const stemId = showdownAdvanceTier(state);
+        if (stemId != null) {
+          sendAudioCommand(io, { action: 'fade-in-stem', stemId, duration: 400 });
+        }
+        // If we've hit the floor, the tier stops advancing but audio keeps playing at $500.
+        // No more stems to add; let it loop until a buzz or host-forced next-song.
+        broadcastState(io, state);
+      }, 5000);
+    };
+
+    socket.on('host:showdown-pick-year', (data: { songId: string }) => {
+      if (state.roundType !== 'song-showdown') return;
+      if (state.phase !== 'showdown-year-pick' && state.phase !== 'result') return;
+      const { loaded, firstStem } = showdownPickYear(state, data.songId);
+      if (!loaded) return;
+      // Load the song's full stem pack so any stem can fade in
+      sendAudioCommand(io, {
+        action: 'load',
+        songId: loaded.id,
+        stems: loaded.stems,
+      });
+      // Slight delay to let audio graph wire up before fading in
+      setTimeout(() => {
+        sendAudioCommand(io, { action: 'play' });
+        if (firstStem != null) {
+          sendAudioCommand(io, { action: 'fade-in-stem', stemId: firstStem, duration: 400 });
+        }
+        broadcastState(io, state);
+        // Start the 5s ticker
+        startShowdownTicker();
+      }, 200);
+      broadcastState(io, state);
+    });
+
+    socket.on('host:showdown-next-song', () => {
+      if (state.roundType !== 'song-showdown') return;
+      sendAudioCommand(io, { action: 'stop' });
+      showdownNextSong(state);
+      broadcastState(io, state);
+    });
+
+    socket.on('host:showdown-set-controller', (data: { playerId: PlayerId }) => {
+      if (state.roundType !== 'song-showdown') return;
+      if (state.players[data.playerId]?.eliminated) return;
+      state.showdownControllerPlayer = data.playerId;
+      broadcastState(io, state);
+    });
+
+    // ============================================
+    // WIN THE WALL EVENTS
+    // ============================================
+    // Snake ticker: every 5s → advance to next musician, play that cell's stem for the current
+    // song. Cleared on buzz / correct / walkaway / skip / bust.
+    const startWtwTicker = () => {
+      wtwClearTimer(state);
+      state.wtwTimerInterval = setInterval(() => {
+        if (state.roundType !== 'win-the-wall' || state.phase !== 'wtw-playing') {
+          wtwClearTimer(state);
+          return;
+        }
+        // Cumulative reveal — don't fade out prior stems; just bring the new one in on top.
+        const { stemId, autoSkipped, bust } = wtwAdvanceMusician(state);
+        if (bust) {
+          sendAudioCommand(io, { action: 'stop' });
+          wtwClearTimer(state);
+        } else if (autoSkipped) {
+          // Song died (5 musicians spent with no guess) — cut all audio, load next song, start fresh
+          sendAudioCommand(io, { action: 'fade-all-out', duration: 300 });
+          setTimeout(() => {
+            sendAudioCommand(io, { action: 'stop' });
+            if (state.currentSong) {
+              sendAudioCommand(io, { action: 'load', songId: state.currentSong.id, stems: state.currentSong.stems });
+              setTimeout(() => {
+                sendAudioCommand(io, { action: 'play' });
+                for (const sid of state.activeStems) {
+                  sendAudioCommand(io, { action: 'fade-in-stem', stemId: sid, duration: 300 });
+                }
+              }, 200);
+            }
+          }, 320);
+        } else if (stemId != null) {
+          sendAudioCommand(io, { action: 'fade-in-stem', stemId, duration: 500 });
+        }
+        broadcastState(io, state);
+      }, 5000);
+    };
+
+    socket.on('host:wtw-set-survivor', (data: { playerId: PlayerId }) => {
+      if (state.roundType !== 'win-the-wall') return;
+      wtwSetSurvivor(state, data.playerId);
+      broadcastState(io, state);
+    });
+
+    socket.on('host:wtw-start-song', () => {
+      if (state.roundType !== 'win-the-wall') return;
+      const { song } = wtwStartSong(state);
+      if (song) {
+        sendAudioCommand(io, { action: 'load', songId: song.id, stems: song.stems });
+        setTimeout(() => {
+          sendAudioCommand(io, { action: 'play' });
+          for (const sid of state.activeStems) {
+            sendAudioCommand(io, { action: 'fade-in-stem', stemId: sid, duration: 300 });
+          }
+          broadcastState(io, state);
+          startWtwTicker();
+        }, 200);
+      }
+      broadcastState(io, state);
+    });
+
+    socket.on('host:wtw-skip', () => {
+      if (state.roundType !== 'win-the-wall') return;
+      wtwClearTimer(state);
+      sendAudioCommand(io, { action: 'fade-all-out', duration: 300 });
+      wtwSkipSong(state);
+      // If not bust, reload the fresh song and start ticker
+      if (state.phase === 'wtw-playing' && state.currentSong) {
+        sendAudioCommand(io, { action: 'load', songId: state.currentSong.id, stems: state.currentSong.stems });
+        setTimeout(() => {
+          sendAudioCommand(io, { action: 'play' });
+          for (const sid of state.activeStems) {
+            sendAudioCommand(io, { action: 'fade-in-stem', stemId: sid, duration: 300 });
+          }
+          broadcastState(io, state);
+          startWtwTicker();
+        }, 200);
+      }
+      broadcastState(io, state);
+    });
+
+    socket.on('host:wtw-walkaway-accept', () => {
+      if (state.roundType !== 'win-the-wall') return;
+      sendAudioCommand(io, { action: 'fade-all-out', duration: 500 });
+      wtwAcceptWalkaway(state);
+      broadcastState(io, state);
+    });
+
+    socket.on('host:wtw-walkaway-decline', () => {
+      if (state.roundType !== 'win-the-wall') return;
+      wtwDeclineWalkaway(state);
+      // Load next song and resume ticker
+      sendAudioCommand(io, { action: 'fade-all-out', duration: 300 });
+      if (state.phase === 'wtw-playing' && state.currentSong) {
+        sendAudioCommand(io, { action: 'load', songId: state.currentSong.id, stems: state.currentSong.stems });
+        setTimeout(() => {
+          sendAudioCommand(io, { action: 'play' });
+          for (const sid of state.activeStems) {
+            sendAudioCommand(io, { action: 'fade-in-stem', stemId: sid, duration: 300 });
+          }
+          broadcastState(io, state);
+          startWtwTicker();
+        }, 200);
+      }
+      broadcastState(io, state);
+    });
+
+    // ============================================
     // DISCONNECT
     // ============================================
 
@@ -586,6 +877,7 @@ export function setupSocketHandlers(io: Server, state: GameState) {
           state.players[meta.playerId].connected = false;
           if (meta.playerId === 1) state.connections.player1 = false;
           if (meta.playerId === 2) state.connections.player2 = false;
+          if (meta.playerId === 3) state.connections.player3 = false;
         }
         socketMeta.delete(socket.id);
       }

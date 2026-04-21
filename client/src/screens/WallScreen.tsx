@@ -45,7 +45,10 @@ export function WallScreen() {
 
   const { phase, roundName, songNumber, totalSongs, musicians, currentPrize,
     players, buzzedPlayer, visualEffect, songTitle, revealText, message,
-    auctionBids, auctionWinner, auctionTimer, genre } = wallState;
+    auctionBids, auctionWinner, auctionTimer, genre,
+    showdownRows, showdownController, showdownLadder, showdownSongsPlayed, showdownTier,
+    wtwMusicianIndex, wtwSongsWon, wtwMusiciansThisSong, wtwCurrentOffer } = wallState;
+  const PLAYER_COLORS: Record<1 | 2 | 3, string> = { 1: '#00d4ff', 2: '#ff00aa', 3: '#ff8c00' };
 
   return (
     <div style={styles.container}>
@@ -145,45 +148,34 @@ export function WallScreen() {
           <h1 style={styles.title}>WALL OF SOUND</h1>
           <div style={styles.lobbyDivider} />
           <div style={styles.playerCards}>
-            <div style={{
-              ...styles.lobbyPlayerCard,
-              borderColor: players[1].connected ? '#00d4ff' : '#333',
-              boxShadow: players[1].connected ? '0 0 20px #00d4ff30' : 'none',
-            }}>
-              <div style={{ fontSize: '1.5rem' }}>🎵</div>
-              <div style={{ fontFamily: 'Montserrat', fontWeight: 800, color: '#00d4ff', fontSize: '1.1rem' }}>
-                {players[1].name}
-              </div>
-              <div style={{
-                fontSize: '0.7rem',
-                fontWeight: 700,
-                color: players[1].connected ? '#00ff88' : '#666',
-                textTransform: 'uppercase',
-                letterSpacing: '0.15em',
-              }}>
-                {players[1].connected ? '● READY' : '○ WAITING'}
-              </div>
-            </div>
-            <div style={styles.lobbyVs}>VS</div>
-            <div style={{
-              ...styles.lobbyPlayerCard,
-              borderColor: players[2].connected ? '#ff00aa' : '#333',
-              boxShadow: players[2].connected ? '0 0 20px #ff00aa30' : 'none',
-            }}>
-              <div style={{ fontSize: '1.5rem' }}>🎵</div>
-              <div style={{ fontFamily: 'Montserrat', fontWeight: 800, color: '#ff00aa', fontSize: '1.1rem' }}>
-                {players[2].name}
-              </div>
-              <div style={{
-                fontSize: '0.7rem',
-                fontWeight: 700,
-                color: players[2].connected ? '#00ff88' : '#666',
-                textTransform: 'uppercase',
-                letterSpacing: '0.15em',
-              }}>
-                {players[2].connected ? '● READY' : '○ WAITING'}
-              </div>
-            </div>
+            {([1, 2, 3] as const).map((pid, idx) => {
+              const color = pid === 1 ? '#00d4ff' : pid === 2 ? '#ff00aa' : '#ff8c00';
+              const p = players[pid];
+              return (
+                <div key={pid} style={{ display: 'contents' }}>
+                  {idx > 0 && <div style={styles.lobbyVs}>VS</div>}
+                  <div style={{
+                    ...styles.lobbyPlayerCard,
+                    borderColor: p.connected ? color : '#333',
+                    boxShadow: p.connected ? `0 0 20px ${color}30` : 'none',
+                  }}>
+                    <div style={{ fontSize: '1.5rem' }}>🎵</div>
+                    <div style={{ fontFamily: 'Montserrat', fontWeight: 800, color, fontSize: '1.1rem' }}>
+                      {p.name}
+                    </div>
+                    <div style={{
+                      fontSize: '0.7rem',
+                      fontWeight: 700,
+                      color: p.connected ? '#00ff88' : '#666',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.15em',
+                    }}>
+                      {p.connected ? '● READY' : '○ WAITING'}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -201,14 +193,188 @@ export function WallScreen() {
         phase === 'auction-offers' || phase === 'auction-bidding' || phase === 'auction-reveal' ||
         phase === 'parts-intro' || phase === 'parts-playing' ||
         phase === 'another-level-board' ||
+        phase === 'showdown-year-pick' ||
+        phase === 'wtw-playing' || phase === 'wtw-walkaway-offer' || phase === 'wtw-gold' || phase === 'wtw-bust' ||
         (phase === 'round-intro' && wallState.roundType === 'another-level')) && (
-        <div style={styles.wallContainer}>
+        <div style={{ ...styles.wallContainer, position: 'relative' }}>
           <div style={styles.wallGrid}>
             {musicians.map((m) => (
               <MusicianCell key={m.id} musician={m} />
             ))}
           </div>
+          {/* Song Showdown: year label pinned to each wall row. Grid overlay matches wallGrid's
+              rows exactly so "1958 / 1973 / 1984" sit smack in their row's vertical band. */}
+          {wallState.roundType === 'song-showdown' && showdownRows && (
+            <div style={{
+              position: 'absolute', inset: 0,
+              display: 'grid', gridTemplateRows: 'repeat(3, 1fr)',
+              pointerEvents: 'none', zIndex: 3,
+            }}>
+              {showdownRows.map(r => (
+                <div key={r.row} style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  opacity: r.selected ? 1 : r.songId ? 0.35 : 0.08,
+                  transition: 'opacity 0.4s ease',
+                }}>
+                  <div style={{
+                    fontFamily: 'Montserrat', fontWeight: 900,
+                    fontSize: 'clamp(2.5rem, 7vw, 6rem)',
+                    color: r.selected ? '#ffd700' : '#60607a',
+                    textShadow: r.selected ? '0 0 40px #ffd70080, 0 0 80px #ffd70040' : 'none',
+                    letterSpacing: '0.05em',
+                  }}>
+                    {r.year || '—'}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
+      )}
+
+      {/* ============================================ */}
+      {/* SONG SHOWDOWN prize tier + controller chip    */}
+      {/* (Year labels are rendered inside the wall     */}
+      {/*  container above so they pin to the rows)     */}
+      {/* ============================================ */}
+      {wallState.roundType === 'song-showdown' && showdownRows && phase !== 'lobby' && phase !== 'round-complete' && (
+        <>
+          {/* Prize ladder + controller chip */}
+          <div style={{
+            position: 'absolute', top: '80px', left: '50%', transform: 'translateX(-50%)',
+            display: 'flex', alignItems: 'center', gap: 18, zIndex: 10,
+            background: '#0a0a1acc', padding: '6px 16px', borderRadius: 20,
+            border: '1px solid #ffd70044',
+          }}>
+            <span style={{ fontSize: '0.75rem', color: '#a0a0b0', fontWeight: 700, letterSpacing: '0.1em' }}>
+              SONG {(showdownSongsPlayed ?? 0) + 1}/6
+            </span>
+            {showdownController && (
+              <span style={{
+                fontSize: '0.75rem', fontWeight: 800,
+                padding: '3px 10px', borderRadius: 8,
+                background: `${PLAYER_COLORS[showdownController]}22`,
+                border: `1px solid ${PLAYER_COLORS[showdownController]}`,
+                color: PLAYER_COLORS[showdownController],
+              }}>
+                {players[showdownController].name} PICKS
+              </span>
+            )}
+            {showdownLadder && (
+              <span style={{ display: 'flex', gap: 6, fontSize: '0.8rem', fontWeight: 800 }}>
+                {showdownLadder.map((v, i) => (
+                  <span key={i} style={{
+                    color: i === showdownTier ? '#ffd700' : '#666',
+                    textShadow: i === showdownTier ? '0 0 12px #ffd70080' : 'none',
+                  }}>
+                    {formatMoney(v)}
+                  </span>
+                ))}
+              </span>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* ============================================ */}
+      {/* WIN THE WALL prize pyramid + survivor chip    */}
+      {/* ============================================ */}
+      {wallState.roundType === 'win-the-wall' && phase !== 'lobby' && phase !== 'round-complete' && (
+        <>
+          <div style={{
+            position: 'absolute', top: '80px', right: '40px', zIndex: 10,
+            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3,
+          }}>
+            {[
+              // Full 6-tier ladder. Gates (3, 5, 6) pay out; others are milestones only.
+              { songs: 6, prize: 1_000_000, gate: true },
+              { songs: 5, prize: 100_000,   gate: true },
+              { songs: 4, prize: 75_000,    gate: false },
+              { songs: 3, prize: 50_000,    gate: true },
+              { songs: 2, prize: 10_000,    gate: false },
+              { songs: 1, prize: 1_000,     gate: false },
+            ].map(tier => {
+              const reached = (wtwSongsWon ?? 0) >= tier.songs;
+              const isOffer = phase === 'wtw-walkaway-offer' && wtwCurrentOffer === tier.prize;
+              const width = 100 + tier.songs * 20;
+              return (
+                <div key={tier.songs} style={{
+                  width: `${width}px`, padding: '4px 12px',
+                  background: reached ? '#ffd70033' : isOffer ? '#ffd70055' : '#0a0a1a99',
+                  border: `1px solid ${reached ? '#ffd700' : isOffer ? '#ffd700' : tier.gate ? '#666' : '#333'}`,
+                  borderRadius: 4, textAlign: 'center',
+                  fontFamily: 'Montserrat', fontSize: '0.8rem', fontWeight: 800,
+                  color: reached ? '#ffd700' : isOffer ? '#ffd700' : tier.gate ? '#bbb' : '#777',
+                }}>
+                  {formatMoney(tier.prize)}
+                  {tier.gate && !reached && <span style={{ fontSize: '0.55rem', opacity: 0.7, marginLeft: 6 }}>GATE</span>}
+                </div>
+              );
+            })}
+          </div>
+          {/* Musician-this-song indicator */}
+          <div style={{
+            position: 'absolute', top: '80px', left: '50%', transform: 'translateX(-50%)', zIndex: 10,
+            display: 'flex', gap: 12, background: '#0a0a1acc', padding: '6px 16px', borderRadius: 20,
+            border: '1px solid #ffd70044',
+          }}>
+            <span style={{ fontSize: '0.75rem', color: '#a0a0b0', fontWeight: 700, letterSpacing: '0.1em' }}>
+              SONG {(wtwSongsWon ?? 0) + 1} · MUSICIAN {(wtwMusicianIndex ?? 0) + 1}/15 · THIS SONG {wtwMusiciansThisSong ?? 0}/5
+            </span>
+          </div>
+          {/* Walkaway decision overlay */}
+          {phase === 'wtw-walkaway-offer' && wtwCurrentOffer != null && (
+            <div style={{
+              position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+              background: 'linear-gradient(180deg, #1a1a3a, #0a0a1a)',
+              border: '4px solid #ffd700', borderRadius: 24,
+              padding: '30px 60px', zIndex: 40,
+              boxShadow: '0 0 80px #ffd70080', textAlign: 'center',
+            }}>
+              <div style={{ fontSize: '0.9rem', color: '#ffd700', fontWeight: 700, letterSpacing: '0.3em' }}>
+                TAKE THE CASH?
+              </div>
+              <div style={{ fontSize: 'clamp(3rem, 8vw, 6rem)', fontWeight: 900, color: '#ffd700', margin: '12px 0',
+                            textShadow: '0 0 40px #ffd70080' }}>
+                {formatMoney(wtwCurrentOffer)}
+              </div>
+              <div style={{ fontSize: '0.85rem', color: '#a0a0b0' }}>
+                OR KEEP GOING FOR THE NEXT TIER
+              </div>
+            </div>
+          )}
+          {phase === 'wtw-gold' && (
+            <div style={{
+              position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+              background: 'linear-gradient(135deg, #ffd700, #ff8c00)',
+              border: '4px solid #fff', borderRadius: 32,
+              padding: '40px 80px', zIndex: 40,
+              boxShadow: '0 0 120px #ffd700',
+              animation: 'scale-in 0.5s ease-out',
+            }}>
+              <div style={{ fontSize: '0.9rem', color: '#1a1a1a', fontWeight: 900, letterSpacing: '0.3em' }}>
+                JACKPOT
+              </div>
+              <div style={{ fontSize: 'clamp(3rem, 10vw, 7rem)', fontWeight: 900, color: '#1a1a1a', margin: '8px 0' }}>
+                $1,000,000
+              </div>
+            </div>
+          )}
+          {phase === 'wtw-bust' && (
+            <div style={{
+              position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+              background: '#2a0000', border: '3px solid #ff4444', borderRadius: 16,
+              padding: '24px 48px', zIndex: 40, textAlign: 'center',
+            }}>
+              <div style={{ fontSize: 'clamp(1.5rem, 4vw, 2.5rem)', fontWeight: 900, color: '#ff4444' }}>
+                OUT OF MUSICIANS
+              </div>
+              <div style={{ fontSize: '1rem', color: '#ff8888', marginTop: 8 }}>
+                Walk away with nothing
+              </div>
+            </div>
+          )}
+        </>
       )}
 
       {/* Genre label for auction */}
@@ -353,8 +519,9 @@ export function WallScreen() {
 
       {/* Scoreboard */}
       <div style={styles.scoreboard}>
-        <ScoreCard name={players[1].name} score={players[1].score} isBuzzed={buzzedPlayer === 1} side="left" />
-        <ScoreCard name={players[2].name} score={players[2].score} isBuzzed={buzzedPlayer === 2} side="right" />
+        <ScoreCard name={players[1].name} score={players[1].score} isBuzzed={buzzedPlayer === 1} eliminated={players[1].eliminated} color="#00d4ff" />
+        <ScoreCard name={players[2].name} score={players[2].score} isBuzzed={buzzedPlayer === 2} eliminated={players[2].eliminated} color="#ff00aa" />
+        <ScoreCard name={players[3].name} score={players[3].score} isBuzzed={buzzedPlayer === 3} eliminated={players[3].eliminated} color="#ff8c00" />
       </div>
 
       {/* Round complete */}
@@ -366,26 +533,27 @@ export function WallScreen() {
           <h1 style={{ ...styles.title, animation: 'scale-in 0.5s ease-out' }}>ROUND COMPLETE</h1>
           <div style={styles.lobbyDivider} />
           <div style={styles.finalScores}>
-            <div style={{
-              textAlign: 'center',
-              padding: '12px 24px',
-              background: players[1].score >= players[2].score ? '#00d4ff15' : 'transparent',
-              borderRadius: '8px',
-              border: players[1].score > players[2].score ? '1px solid #00d4ff44' : '1px solid transparent',
-            }}>
-              <div style={{ fontSize: '0.8rem', color: '#00d4ff', marginBottom: '4px' }}>{players[1].name}</div>
-              <div style={{ fontSize: '2rem', fontWeight: 900 }}>{formatMoney(players[1].score)}</div>
-            </div>
-            <div style={{
-              textAlign: 'center',
-              padding: '12px 24px',
-              background: players[2].score >= players[1].score ? '#ff00aa15' : 'transparent',
-              borderRadius: '8px',
-              border: players[2].score > players[1].score ? '1px solid #ff00aa44' : '1px solid transparent',
-            }}>
-              <div style={{ fontSize: '0.8rem', color: '#ff00aa', marginBottom: '4px' }}>{players[2].name}</div>
-              <div style={{ fontSize: '2rem', fontWeight: 900 }}>{formatMoney(players[2].score)}</div>
-            </div>
+            {([1, 2, 3] as const).map((pid) => {
+              const color = pid === 1 ? '#00d4ff' : pid === 2 ? '#ff00aa' : '#ff8c00';
+              const p = players[pid];
+              const topScore = Math.max(players[1].score, players[2].score, players[3].score);
+              const isLeader = p.score === topScore && p.score > 0;
+              return (
+                <div key={pid} style={{
+                  textAlign: 'center',
+                  padding: '12px 24px',
+                  background: isLeader ? `${color}15` : 'transparent',
+                  borderRadius: '8px',
+                  border: isLeader ? `1px solid ${color}44` : '1px solid transparent',
+                  opacity: p.eliminated ? 0.45 : 1,
+                }}>
+                  <div style={{ fontSize: '0.8rem', color, marginBottom: '4px', textDecoration: p.eliminated ? 'line-through' : 'none' }}>
+                    {p.name}
+                  </div>
+                  <div style={{ fontSize: '2rem', fontWeight: 900 }}>{formatMoney(p.score)}</div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -608,21 +776,27 @@ function MusicianCell({ musician }: { musician: WallMusician }) {
   );
 }
 
-function ScoreCard({ name, score, isBuzzed, side }: {
-  name: string; score: number; isBuzzed: boolean; side: 'left' | 'right';
+function ScoreCard({ name, score, isBuzzed, eliminated, color }: {
+  name: string; score: number; isBuzzed: boolean; eliminated?: boolean; color: string;
 }) {
   return (
     <div style={{
       padding: '8px 20px',
       background: isBuzzed ? '#ffd70033' : '#1a1a3a',
-      border: `2px solid ${isBuzzed ? '#ffd700' : '#333'}`,
+      border: `2px solid ${isBuzzed ? '#ffd700' : eliminated ? '#444' : '#333'}`,
       borderRadius: '8px',
       textAlign: 'center',
       minWidth: '150px',
       animation: isBuzzed ? 'glow-pulse 1s ease-in-out infinite' : 'none',
       color: isBuzzed ? '#ffd700' : 'inherit',
+      opacity: eliminated ? 0.45 : 1,
+      position: 'relative',
     }}>
-      <div style={{ fontSize: '0.75rem', fontWeight: 600, opacity: 0.7, textTransform: 'uppercase' }}>
+      <div style={{
+        fontSize: '0.75rem', fontWeight: 600, opacity: 0.7, textTransform: 'uppercase',
+        color: isBuzzed ? undefined : color,
+        textDecoration: eliminated ? 'line-through' : 'none',
+      }}>
         {name}
       </div>
       <div style={{
@@ -633,6 +807,14 @@ function ScoreCard({ name, score, isBuzzed, side }: {
       }}>
         {formatMoney(score)}
       </div>
+      {eliminated && (
+        <div style={{
+          position: 'absolute', top: 2, right: 6,
+          fontSize: '0.55rem', color: '#888', fontWeight: 800, letterSpacing: '0.15em',
+        }}>
+          OUT
+        </div>
+      )}
     </div>
   );
 }

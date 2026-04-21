@@ -2,10 +2,19 @@ import { useState, useCallback, useEffect } from 'react';
 import { useSocket } from '../hooks/useSocket';
 import { useAudioEngine } from '../hooks/useAudioEngine';
 import { formatMoney } from '@shared/types';
+import type { PlayerId } from '@shared/types';
 
 interface PlayerScreenProps {
-  playerId: 1 | 2;
+  playerId: PlayerId;
 }
+
+// Orange for Player 3 is distinct from P1 cyan and P2 magenta, avoids green (correct)
+// and yellow (warning). Matches the hub tile accent.
+const PLAYER_COLORS: Record<PlayerId, string> = {
+  1: '#00d4ff',
+  2: '#ff00aa',
+  3: '#ff8c00',
+};
 
 export function PlayerScreen({ playerId }: PlayerScreenProps) {
   const audioEngine = useAudioEngine();
@@ -62,7 +71,7 @@ export function PlayerScreen({ playerId }: PlayerScreenProps) {
     auctionOffers, auctionCanBid, auctionMyBid, auctionOtherBid, auctionWinner, auctionTimer, genre } = playerState;
 
   // Player color based on ID
-  const playerColor = playerId === 1 ? '#00d4ff' : '#ff00aa';
+  const playerColor = PLAYER_COLORS[playerId];
 
   // First-time name prompt: block until they enter a real name
   const isDefaultName = name === `Player ${playerId}`;

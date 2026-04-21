@@ -101,7 +101,9 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`  Wall:      ${base}/wall`);
   console.log(`  Player 1:  ${base}/player/1`);
   console.log(`  Player 2:  ${base}/player/2`);
+  console.log(`  Player 3:  ${base}/player/3`);
   console.log(`  Host:      ${base}/host`);
+  console.log(`  Setup:     ${base}/setup`);
   console.log('');
   console.log('===========================================');
   console.log('');

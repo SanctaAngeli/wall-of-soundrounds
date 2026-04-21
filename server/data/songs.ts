@@ -394,6 +394,28 @@ export const roundSongSets: Record<RoundType, string[]> = {
   'music-auction': ['humble', 'livin-la-vida-loca', 'johnny-b-goode', 'virtual-insanity'],
   // song-in-5-parts: overridden at runtime from partsQuestions targets; listed here for completeness
   'song-in-5-parts': ['thescientist', 'break-my-heart', 'zombie', 'love-story', 'we-didnt-start-the-fire'],
+  // Song Showdown: 6 curated songs with distinct years. 3 visible at once + 3 replacements as they're played.
+  // Picked to span ≥60 years of music so every contestant has a recognisable decade.
+  'song-showdown': [
+    'johnny-b-goode',         // 1958 — rock & roll
+    'the-joker',              // 1973 — rock
+    'radio-gaga',             // 1984 — rock
+    'oops-i-did-it-again',    // 2000 — pop
+    'thank-you-next',         // 2018 — pop
+    'paint-the-town-red',     // 2023 — hip-hop
+  ],
+  // Win the Wall: endgame solo round. Need 6 correct to hit the $1m jackpot; lineup carries 8 for
+  // alternates. Ordered easiest → hardest so early songs can be cleared fast (saving musicians).
+  'win-the-wall': [
+    'tik-tok',                // 2009
+    'never-gonna-give-you-up',// 1987
+    'let-it-go',              // 2013
+    'mr-blue-sky',            // 1977
+    'humble',                 // 2017
+    'superstition',           // 1972
+    'radio-gaga',             // 1984 — alternate
+    'virtual-insanity',       // 1996 — alternate
+  ],
 };
 
 // Prize configurations per round
@@ -402,7 +424,44 @@ export const roundPrizes: Record<RoundType, number[]> = {
   'another-level': [1000, 2000, 6000],
   'music-auction': [15000, 6000, 3000, 2000, 1000], // Based on musician count chosen
   'song-in-5-parts': [1000, 2000, 3000, 4000, 5000], // col 1 → col 5; total possible $15k
+  // Song Showdown: base ladder. Runtime doubles every entry for songs 4-6 (so the late-game values are
+  // actually 5k / 4k / 3k / 2k / 1k). Ladder walks down as each musician joins: more musicians = lower cash.
+  'song-showdown': [2500, 2000, 1500, 1000, 500],
+  // Win the Wall: walkaway values at songs 3 and 5 plus the $1m jackpot at 6. Indices 0-5 = songs 1-6.
+  // Before song 3 → bust = $0. At song 3 → $50k offer. At 5 → $100k. At 6 → $1m.
+  'win-the-wall': [0, 0, 0, 50000, 50000, 100000], // walkaway values keyed by (songsWon after the song)
 };
+
+// Win the Wall ladder milestones (songsWon count → cash offer).
+// Gates (3, 5, 6) trigger an explicit walkaway decision phase on the host + wall.
+// Between-gate tiers (1, 2, 4) are display-only milestones so the pyramid shows progress;
+// the survivor keeps playing through them without a walkaway choice.
+export const WTW_WALKAWAY_OFFERS: Record<number, number> = {
+  3: 50000,
+  5: 100000,
+  6: 1_000_000,
+};
+
+// Full 6-tier cash ladder for the pyramid display. Gate values (3/5/6) must match
+// WTW_WALKAWAY_OFFERS above so the wall doesn't show a different number from what the host
+// offers. Between-tier values are nominal milestones only.
+export const WTW_TIER_VALUES: Record<number, number> = {
+  1: 1_000,
+  2: 10_000,
+  3: 50_000,    // walkaway gate
+  4: 75_000,
+  5: 100_000,   // walkaway gate
+  6: 1_000_000, // jackpot
+};
+
+// Win the Wall snake path through the 15 cells: bottom row L→R → middle row R→L → top row L→R.
+// Each entry is [row, col] zero-indexed where row 0 = top, row 2 = bottom. Index 14 = top-right
+// Vocals cell = "the last note" referenced in the round spec.
+export const WTW_SNAKE: ReadonlyArray<readonly [number, number]> = [
+  [2, 0], [2, 1], [2, 2], [2, 3], [2, 4],  // bottom L→R
+  [1, 4], [1, 3], [1, 2], [1, 1], [1, 0],  // middle R→L
+  [0, 0], [0, 1], [0, 2], [0, 3], [0, 4],  // top L→R (ends top-right)
+];
 
 // Song in 5 Parts: 5 questions, each with a target song + 2 herring songs
 export interface PartsQuestion {
