@@ -51,7 +51,7 @@ export type GamePhase =
   // Win the Wall specific
   | 'wtw-playing'                 // musician snake is ticking, buzz open
   | 'wtw-walkaway-offer'          // at 3 or 5 songs: offer walkaway vs keep-going
-  | 'wtw-gold'                    // all 6 — wall turns gold, $1m won
+  | 'wtw-gold'                    // all 6 — wall turns gold, jackpot won (default $250k, host-configurable)
   | 'wtw-bust';                   // burned all 15 musicians without 3 — walks with nothing
 
 export type ScreenRole = 'wall' | 'player' | 'host';
@@ -135,7 +135,16 @@ export interface WallState {
   wtwSongsWon?: number;                      // 0-6
   wtwMusiciansThisSong?: number;             // 0-5 — 5 forces skip
   wtwSurvivor?: PlayerId | null;             // who's playing
-  wtwCurrentOffer?: number | null;           // walkaway tier displayed at a gate (50k / 100k / 1m)
+  wtwCurrentOffer?: number | null;           // walkaway tier displayed at a gate (50k / 100k / 250k)
+  wtwStartingScore?: number;                 // survivor's banked total at round start — shown on bust
+  wtwPrizes?: { gate3: number; gate5: number; gate6: number };  // resolved cash for the 3 gates
+  // Host-triggered narrative pause: shows a big "here's where everyone is" scoreboard overlay
+  // on the wall. Can be toggled at any phase without affecting the underlying round state.
+  showScoresOverlay?: boolean;
+  // True while the current round is running as a demo (dry-run / tutorial). Wall shows a
+  // persistent "DEMO" badge; scores and eliminations will be reverted when the host leaves
+  // the round.
+  demoMode?: boolean;
 }
 
 export interface PlayerState {
@@ -248,6 +257,10 @@ export interface HostState {
   wtwCurrentSongId?: string | null;
   wtwJackpotIfWon?: number;
   wtwLineupSize?: number;
+  wtwStartingScore?: number;
+  wtwPrizes?: { gate3: number; gate5: number; gate6: number };
+  showScoresOverlay?: boolean;
+  demoMode?: boolean;
   // Current editable config — shown in /setup and used to drive round lineups at selection time
   config?: GameConfig;
 }
@@ -278,7 +291,10 @@ export interface ClientEvents {
   'register': { role: ScreenRole; playerId?: PlayerId };
   'player:buzz': { playerId: PlayerId; timestamp: number };
   'player:set-name': { playerId: PlayerId; name: string };
-  'host:select-round': { round: RoundType };
+  // round: which round to run. demo (optional, default false): run the round as a dry-run,
+  // using the demo lineup if configured. Score and eliminated-flag changes during a demo
+  // round are reverted when the host leaves the round (back-to-lobby / picks another round).
+  'host:select-round': { round: RoundType; demo?: boolean };
   'host:load-song': { songIndex: number };
   'host:play': {};
   'host:pause': {};
@@ -291,9 +307,17 @@ export interface ClientEvents {
   'host:give-to-other': {};
   'host:next-song': {};
   'host:adjust-score': { player: PlayerId; delta: number };
+  // Manually set a player's score to an exact value. Used for mid-show corrections,
+  // producer overrides, or loading a carry-over total from a previous episode.
+  // Any integer allowed (incl. negative). The host UI no-ops when the input is empty.
+  'host:set-score': { player: PlayerId; amount: number };
   // Manually flip a player's eliminated flag. Used to resolve showdown ties or to skip the
   // opener and go straight to 2-player rounds with a pre-chosen elimination.
   'host:set-eliminated': { player: PlayerId; eliminated: boolean };
+  // Toggle the "show me the money" overlay on the wall — a narrative pause where the host
+  // reads out each player's running total. Orthogonal to game phase; audio/round continues
+  // underneath. Pass { show: true } to reveal, { show: false } to dismiss.
+  'host:toggle-scores-overlay': { show: boolean };
   'host:end-round': {};
   'host:reset': {};
   'host:set-stem': { stemId: number; active: boolean };
@@ -341,6 +365,10 @@ export interface ClientEvents {
   'host:wtw-reset': {};                              // reset round state, keep lineup
   'host:config-set-showdown-lineup': { songIds: string[] };
   'host:config-set-wtw-lineup': { songIds: string[] };
+  // Edit one or more of the 3 Win-the-Wall cash gates. Only the keys included get updated.
+  // Pass `null` for a value to reset that gate to the hard-coded default ($50k/$100k/$250k).
+  'host:config-set-wtw-prizes': { gate3?: number | null; gate5?: number | null; gate6?: number | null };
+  'host:config-set-demo-lineup': { round: RoundType; songIds: string[] };
 }
 
 // Server -> Client
@@ -429,4 +457,13 @@ export interface GameConfig {
   // Win the Wall: ordered song pool for the endgame. Up to 8 songs — round needs 6 to clear,
   // alternates stand by in case of producer curveballs between takes.
   winTheWallLineup?: string[];
+  // Win the Wall: per-gate cash values (songs 3, 5, 6). Overrides the hard-coded
+  // $50k / $100k / $250k defaults. Missing keys fall through to the default.
+  // All three are ADDITIVE on top of banked earnings from earlier rounds.
+  winTheWallPrizes?: Partial<Record<3 | 5 | 6, number>>;
+  // Per-round "demo lineup" — a short (recommended 3-song) set used when the host toggles a
+  // round into demo mode from /host or /setup. Demo rounds run exactly like the real thing but
+  // score changes and eliminations are reverted at round end via a pre-round snapshot.
+  // Missing entry for a round ⇒ demo falls back to the first 3 songs of the real lineup.
+  demoLineup?: Partial<Record<RoundType, string[]>>;
 }

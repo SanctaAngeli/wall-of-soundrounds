@@ -4,7 +4,7 @@ import type {
   AuctionOffer, SongPart, GameConfig,
 } from '../shared/types.js';
 import { ROW_COLORS, WALL_INSTRUMENTS, ROUND_NAMES, formatMoney } from '../shared/types.js';
-import { getSongsForRound, getSongById, getPartsQuestion, getPartsColumnSongs, roundPrizes, roundSongSets, partsQuestions, partsColumnQuestions, anotherLevelBoard, anotherLevelSongs, AL_COL_INSTRUMENTS, WTW_SNAKE, WTW_WALKAWAY_OFFERS } from './data/songs.js';
+import { getSongsForRound, getSongById, getPartsQuestion, getPartsColumnSongs, roundPrizes, roundSongSets, partsQuestions, partsColumnQuestions, anotherLevelBoard, anotherLevelSongs, AL_COL_INSTRUMENTS, WTW_SNAKE, WTW_WALKAWAY_OFFERS_DEFAULT } from './data/songs.js';
 import type { AnotherLevelSongConfig } from './data/songs.js';
 import { INSTRUMENT_ICONS, INSTRUMENT_COLORS } from '../shared/types.js';
 
@@ -108,6 +108,22 @@ export interface GameState {
   wtwSurvivor: PlayerId | null;              // which player is doing the endgame
   wtwTimerInterval: ReturnType<typeof setInterval> | null;
   wtwWalkawayOffered: number | null;         // cash offer being displayed (at gates 3 and 5)
+  // Snapshot the survivor's banked total at round start. Used by the bust message so the wall
+  // shows "Walk away with $X" (their series earnings) instead of "nothing" — bust doesn't wipe
+  // the money they brought into the final.
+  wtwStartingScore: number;
+
+  // Host-triggered scoreboard overlay. Orthogonal to game phase — setting this true at any time
+  // displays a big "Player 1: $X, Player 2: $X, Player 3: $X" overlay on the wall. Audio and
+  // round state continue underneath. Dismissed with another host click.
+  showScoresOverlay: boolean;
+
+  // Demo mode: current round is a dry-run. Uses the demo lineup (3 songs). Score changes and
+  // eliminations during this round get reverted when the host leaves it.
+  demoMode: boolean;
+  demoSnapshot: {
+    players: { 1: PlayerInfo; 2: PlayerInfo; 3: PlayerInfo };
+  } | null;
 
   // Editable setup config — host mutates via /setup; overrides the hard-coded roundSongSets etc.
   config: GameConfig;
@@ -181,6 +197,10 @@ export function createInitialState(): GameState {
     wtwSurvivor: null,
     wtwTimerInterval: null,
     wtwWalkawayOffered: null,
+    wtwStartingScore: 0,
+    showScoresOverlay: false,
+    demoMode: false,
+    demoSnapshot: null,
     config: {
       roundLineups: {},
       anotherLevelGroupSongs: {},
@@ -268,6 +288,22 @@ export function setWtwLineup(state: GameState, songIds: string[]): void {
   state.config.winTheWallLineup = songIds;
 }
 
+// Set one or more WTW gate prizes. `null` clears a gate back to the default. Missing keys
+// leave the existing override untouched.
+export function setWtwPrizes(state: GameState, updates: { gate3?: number | null; gate5?: number | null; gate6?: number | null }): void {
+  if (!state.config.winTheWallPrizes) state.config.winTheWallPrizes = {};
+  const prizes = state.config.winTheWallPrizes as Record<number, number | undefined>;
+  const apply = (milestone: 3 | 5 | 6, v: number | null | undefined) => {
+    if (v === undefined) return;
+    if (v === null) { delete prizes[milestone]; return; }
+    if (!Number.isFinite(v)) return;
+    prizes[milestone] = Math.max(0, Math.round(v));
+  };
+  apply(3, updates.gate3);
+  apply(5, updates.gate5);
+  apply(6, updates.gate6);
+}
+
 // Resolve the year to show for a song — config override beats the baked-in year.
 export function resolveSongYear(state: GameState, song: Song): number {
   return state.config.songYearOverrides?.[song.id] ?? song.year;
@@ -283,6 +319,8 @@ export function resetConfig(state: GameState): void {
     songYearOverrides: {},
     songShowdownLineup: [],
     winTheWallLineup: [],
+    winTheWallPrizes: {},
+    demoLineup: {},
   };
 }
 
@@ -299,6 +337,8 @@ export function importConfig(state: GameState, config: GameConfig): void {
     songYearOverrides: config.songYearOverrides ?? {},
     songShowdownLineup: config.songShowdownLineup ?? [],
     winTheWallLineup: config.winTheWallLineup ?? [],
+    winTheWallPrizes: config.winTheWallPrizes ?? {},
+    demoLineup: config.demoLineup ?? {},
   };
 }
 
@@ -654,6 +694,14 @@ export function deriveWallState(state: GameState): WallState {
     wtwMusiciansThisSong: state.roundType === 'win-the-wall' ? state.wtwMusiciansThisSong : undefined,
     wtwSurvivor: state.roundType === 'win-the-wall' ? state.wtwSurvivor : undefined,
     wtwCurrentOffer: state.roundType === 'win-the-wall' ? state.wtwWalkawayOffered : undefined,
+    wtwStartingScore: state.roundType === 'win-the-wall' ? state.wtwStartingScore : undefined,
+    wtwPrizes: state.roundType === 'win-the-wall' ? {
+      gate3: resolveWtwPrize(state, 3),
+      gate5: resolveWtwPrize(state, 5),
+      gate6: resolveWtwPrize(state, 6),
+    } : undefined,
+    showScoresOverlay: state.showScoresOverlay,
+    demoMode: state.demoMode,
   };
 }
 
@@ -861,8 +909,16 @@ export function deriveHostState(state: GameState): HostState {
     wtwMusiciansThisSong: state.roundType === 'win-the-wall' ? state.wtwMusiciansThisSong : undefined,
     wtwSurvivor: state.roundType === 'win-the-wall' ? state.wtwSurvivor : undefined,
     wtwCurrentSongId: state.roundType === 'win-the-wall' ? (state.currentSong?.id ?? null) : undefined,
-    wtwJackpotIfWon: state.roundType === 'win-the-wall' ? (WTW_WALKAWAY_OFFERS[state.wtwSongsWon + 1] ?? 0) : undefined,
+    wtwJackpotIfWon: state.roundType === 'win-the-wall' ? resolveWtwPrize(state, state.wtwSongsWon + 1) : undefined,
     wtwLineupSize: state.roundType === 'win-the-wall' ? state.wtwLineup.length : undefined,
+    wtwStartingScore: state.roundType === 'win-the-wall' ? state.wtwStartingScore : undefined,
+    wtwPrizes: state.roundType === 'win-the-wall' ? {
+      gate3: resolveWtwPrize(state, 3),
+      gate5: resolveWtwPrize(state, 5),
+      gate6: resolveWtwPrize(state, 6),
+    } : undefined,
+    showScoresOverlay: state.showScoresOverlay,
+    demoMode: state.demoMode,
   };
 }
 
@@ -870,7 +926,13 @@ export function deriveHostState(state: GameState): HostState {
 // STATE MUTATIONS - GENERIC
 // ============================================
 
-export function selectRound(state: GameState, round: RoundType): void {
+export function selectRound(state: GameState, round: RoundType, opts: { demo?: boolean } = {}): void {
+  // If we were in a demo and are leaving that round (picking a new round, not re-entering
+  // the same one in demo mode), restore the pre-demo snapshot first so scores go back.
+  if (state.demoMode && !opts.demo) {
+    restoreDemoSnapshot(state);
+  }
+
   // Board reset: clear all playback/visual state from previous round
   state.activeStems = [];
   state.isAudioPlaying = false;
@@ -879,10 +941,21 @@ export function selectRound(state: GameState, round: RoundType): void {
   state.songTitle = '';
 
   state.roundType = round;
+
+  // Demo mode: capture a snapshot we can revert to at round end, and use the demo lineup
+  // (shorter, optionally curated) instead of the real one. All other round mechanics are
+  // unchanged — the producer experiences the full round exactly as contestants would.
+  if (opts.demo) {
+    // Only capture if not already in a demo (re-entering demo shouldn't re-snapshot stale state)
+    if (!state.demoMode) state.demoSnapshot = captureDemoSnapshot(state);
+    state.demoMode = true;
+  }
+
   // Honour config override for the round lineup (R1 / R3); fall back to hard-coded default.
   // R1 "5 to 1" specifically plays exactly 5 songs, so the lineup is capped at 5 at runtime
   // even if the host has a longer pool saved for variety across shows.
-  const overrideIds = state.config.roundLineups[round];
+  const demoIds = opts.demo ? resolveDemoLineup(state, round) : null;
+  const overrideIds = demoIds ?? state.config.roundLineups[round];
   if (overrideIds && overrideIds.length > 0) {
     const playable = round === '5to1' ? overrideIds.slice(0, 5) : overrideIds;
     state.roundSongs = playable.map(id => getSongById(id)).filter((s): s is Song => !!s);
@@ -938,6 +1011,7 @@ export function selectRound(state: GameState, round: RoundType): void {
   state.wtwMusiciansThisSong = 0;
   state.wtwSurvivor = null;
   state.wtwWalkawayOffered = null;
+  state.wtwStartingScore = 0;
 
   // Round-specific setup
   if (round === 'another-level') {
@@ -962,8 +1036,12 @@ export function selectRound(state: GameState, round: RoundType): void {
   // non-eliminated players — producer confirmed the initial year is essentially random, then the
   // game proceeds normally from there.
   if (round === 'song-showdown') {
-    const pool = resolveShowdownLineup(state);
-    if (pool.length < 6) {
+    // Demo mode uses the short demo lineup (3 songs → 3 visible, 0 reserve), real round
+    // uses the full lineup (6+ songs → 3 visible + 3+ reserve).
+    const pool = opts.demo ? (demoIds ?? resolveShowdownLineup(state)) : resolveShowdownLineup(state);
+    // Demo relaxes the 6-song minimum — 3 is fine for a walkthrough.
+    const minSongs = opts.demo ? 3 : 6;
+    if (pool.length < minSongs) {
       // Not enough songs — stay on round-intro so host sees the error; the UI disables start.
       state.roundSongs = [];
       state.phase = 'round-intro';
@@ -982,13 +1060,17 @@ export function selectRound(state: GameState, round: RoundType): void {
   // Win the Wall: resolve lineup, default survivor to the highest-scoring non-eliminated player.
   // Host can override via host:wtw-set-survivor before starting.
   if (round === 'win-the-wall') {
-    const pool = resolveWtwLineup(state);
+    // Demo mode uses a shorter lineup; the 6-songs-to-jackpot rule still applies so the
+    // producer should curate a demo lineup that actually clears in 3 (or accept it'll bust).
+    const pool = opts.demo ? (demoIds ?? resolveWtwLineup(state)) : resolveWtwLineup(state);
     state.wtwLineup = pool.map(id => getSongById(id)).filter((s): s is Song => !!s);
     state.wtwMusicianIndex = -1;
     state.wtwSongIndex = 0;
     state.wtwSongsWon = 0;
     state.wtwMusiciansThisSong = 0;
     state.wtwSurvivor = pickWtwSurvivor(state);
+    // Snapshot the survivor's banked total so bust messaging can show "walk with $X".
+    state.wtwStartingScore = state.wtwSurvivor ? state.players[state.wtwSurvivor].score : 0;
     state.wtwWalkawayOffered = null;
     state.roundSongs = state.wtwLineup;
     state.phase = 'round-intro';
@@ -1290,6 +1372,76 @@ export function adjustScore(state: GameState, player: PlayerId, delta: number): 
   state.players[player].score += delta;
 }
 
+// Hard-set a player's score to an exact value. Unlike adjustScore (which is +/- delta),
+// this replaces the total — useful for mid-show corrections and loading carry-over scores.
+export function setScore(state: GameState, player: PlayerId, amount: number): void {
+  if (!Number.isFinite(amount)) return;
+  state.players[player].score = Math.round(amount);
+}
+
+// Show / hide the scores overlay on the wall. Host-triggered narrative pause.
+export function setScoresOverlay(state: GameState, show: boolean): void {
+  state.showScoresOverlay = show;
+}
+
+// ============================================
+// DEMO MODE helpers
+// ============================================
+// Demo rounds play exactly like the real thing but are reverted at round end — scores,
+// eliminated flags, and any timers come back to what they were before the demo started.
+// Used by producers to walk contestants through a round's mechanics without committing to
+// any real money movement.
+
+// Snapshot the player state we'll restore at demo end.
+function captureDemoSnapshot(state: GameState): GameState['demoSnapshot'] {
+  return {
+    players: {
+      1: { ...state.players[1] },
+      2: { ...state.players[2] },
+      3: { ...state.players[3] },
+    },
+  };
+}
+
+// Roll scores + eliminated flags back to whatever was captured when the demo started.
+// No-op if no snapshot exists. Always clears demoMode.
+export function restoreDemoSnapshot(state: GameState): void {
+  if (state.demoSnapshot) {
+    state.players[1] = state.demoSnapshot.players[1];
+    state.players[2] = state.demoSnapshot.players[2];
+    state.players[3] = state.demoSnapshot.players[3];
+  }
+  state.demoSnapshot = null;
+  state.demoMode = false;
+}
+
+// Return a demo lineup for the given round if one is available, else null.
+// Priority: config.demoLineup[round] ⇒ first 3 of the real lineup ⇒ null if nothing resolves.
+export function resolveDemoLineup(state: GameState, round: RoundType): string[] | null {
+  const override = state.config.demoLineup?.[round];
+  if (override && override.length > 0) return override;
+  // Fallback: slice the first 3 songs off the regular lineup for this round.
+  const regular = state.config.roundLineups[round];
+  if (regular && regular.length >= 3) return regular.slice(0, 3);
+  if (round === 'song-showdown') {
+    const p = resolveShowdownLineup(state);
+    if (p.length >= 3) return p.slice(0, 3);
+  }
+  if (round === 'win-the-wall') {
+    const p = resolveWtwLineup(state);
+    if (p.length >= 3) return p.slice(0, 3);
+  }
+  const fallback = roundSongSets[round];
+  if (fallback && fallback.length >= 3) return fallback.slice(0, 3);
+  return null;
+}
+
+// Config mutator for per-round demo lineups
+export function setDemoLineup(state: GameState, round: RoundType, songIds: string[]): void {
+  if (!state.config.demoLineup) state.config.demoLineup = {};
+  state.config.demoLineup[round] = songIds;
+}
+
 export function setPlayerName(state: GameState, player: PlayerId, name: string): void {
   state.players[player].name = name;
 }
@@ -1345,6 +1497,8 @@ export function backToLobby(state: GameState): void {
   partsClearTimer(state);
   showdownClearTimer(state);
   wtwClearTimer(state);
+  // If a demo round was running, revert scores + eliminations before returning to lobby.
+  if (state.demoMode) restoreDemoSnapshot(state);
   state.phase = 'lobby';
   state.roundType = null;
   state.roundSongs = [];
@@ -2094,6 +2248,20 @@ export function resolveWtwLineup(state: GameState): string[] {
   return roundSongSets['win-the-wall'] ?? [];
 }
 
+// Resolve the cash value awarded at a given songs-won milestone. Host can override the 3
+// default gate values ($50k / $100k / $250k) per-show via GameConfig.winTheWallPrizes.
+// Non-gate milestones (1, 2, 4) return 0 — they're blank on the pyramid and don't offer a
+// walkaway. All three milestones (3, 5, 6) are pure additions on top of banked earnings.
+export function resolveWtwPrize(state: GameState, milestone: number): number {
+  // Only milestones 3, 5, 6 ever have a value. Narrow through the paying-gate union so TS
+  // accepts indexing into Partial<Record<3 | 5 | 6, number>>.
+  if (milestone !== 3 && milestone !== 5 && milestone !== 6) return 0;
+  const gate = milestone as 3 | 5 | 6;
+  const override = state.config.winTheWallPrizes?.[gate];
+  if (typeof override === 'number') return override;
+  return WTW_WALKAWAY_OFFERS_DEFAULT[gate] ?? 0;
+}
+
 function pickWtwSurvivor(state: GameState): PlayerId {
   // Default: non-eliminated player with the highest score. Falls back to player 1.
   const active: PlayerId[] = ([1, 2, 3] as const).filter(pid => !state.players[pid].eliminated);
@@ -2126,14 +2294,15 @@ export function wtwStartSong(state: GameState): { song: Song | null; firstCellIn
   // First musician = next in the snake past the spent ones. musicianIndex is global (0-14).
   if (state.wtwMusicianIndex < 0) state.wtwMusicianIndex = 0;
 
-  // If we've burned all 15 before hitting 6 songs → bust
+  // If we've burned all 15 before hitting 6 songs → bust. Bust DOESN'T wipe banked earnings;
+  // the survivor still walks with everything they brought into the final (wtwStartingScore).
   if (state.wtwMusicianIndex >= WTW_SNAKE.length) {
     state.phase = 'wtw-bust';
     state.currentSong = null;
     state.activeStems = [];
     state.isAudioPlaying = false;
     state.visualEffect = 'wrong';
-    state.message = 'Musicians spent — walk with nothing';
+    state.message = `Musicians spent — walk with ${formatMoney(state.wtwStartingScore)}`;
     return { song: null, firstCellIndex: -1, firstStemId: null };
   }
 
@@ -2146,7 +2315,7 @@ export function wtwStartSong(state: GameState): { song: Song | null; firstCellIn
   state.buzzedPlayer = null;
   state.visualEffect = 'none';
   state.message = '';
-  state.currentPrize = WTW_WALKAWAY_OFFERS[state.wtwSongsWon + 1] ?? 0;
+  state.currentPrize = resolveWtwPrize(state, state.wtwSongsWon + 1);
   return { song, firstCellIndex: state.wtwMusicianIndex, firstStemId };
 }
 
@@ -2179,12 +2348,12 @@ export function wtwAdvanceMusician(state: GameState): { stemId: number | null; a
     return wtwSkipSongInternal(state, 'auto');
   }
 
-  // Snake exhausted?
+  // Snake exhausted? Bust preserves banked earnings — they walk with wtwStartingScore, not zero.
   if (state.wtwMusicianIndex >= WTW_SNAKE.length) {
     state.phase = 'wtw-bust';
     state.isAudioPlaying = false;
     state.visualEffect = 'wrong';
-    state.message = 'Musicians spent — walk with nothing';
+    state.message = `Musicians spent — walk with ${formatMoney(state.wtwStartingScore)}`;
     wtwClearTimer(state);
     return { stemId: null, autoSkipped: false, bust: true };
   }
@@ -2207,10 +2376,11 @@ export function wtwMarkCorrect(state: GameState): { newSongsWon: number; atGate:
   state.visualEffect = 'correct';
 
   if (state.wtwSongsWon >= 6) {
-    // Jackpot! Full wall mix, gold state.
-    if (state.wtwSurvivor) state.players[state.wtwSurvivor].score += WTW_WALKAWAY_OFFERS[6];
+    // Jackpot! Full wall mix, gold state. Top prize (defaults to $250k, host-configurable).
+    const jackpot = resolveWtwPrize(state, 6);
+    if (state.wtwSurvivor) state.players[state.wtwSurvivor].score += jackpot;
     state.phase = 'wtw-gold';
-    state.message = `JACKPOT! ${formatMoney(WTW_WALKAWAY_OFFERS[6])}`;
+    state.message = `JACKPOT! ${formatMoney(jackpot)}`;
     state.visualEffect = 'gold';
     state.isAudioPlaying = true;
     // Celebrate with all stems of the current song
@@ -2218,7 +2388,7 @@ export function wtwMarkCorrect(state: GameState): { newSongsWon: number; atGate:
     return { newSongsWon: state.wtwSongsWon, atGate: false, jackpot: true };
   }
 
-  const walkaway = WTW_WALKAWAY_OFFERS[state.wtwSongsWon];
+  const walkaway = resolveWtwPrize(state, state.wtwSongsWon);
   if (walkaway) {
     state.wtwWalkawayOffered = walkaway;
     state.phase = 'wtw-walkaway-offer';
@@ -2315,7 +2485,7 @@ export function wtwDeclineWalkaway(state: GameState): void {
     state.currentSong = null;
     state.activeStems = [];
     state.isAudioPlaying = false;
-    state.message = 'Out of songs or musicians';
+    state.message = `Out of songs — walk with ${formatMoney(state.wtwStartingScore)}`;
     return;
   }
 
@@ -2328,13 +2498,15 @@ export function wtwDeclineWalkaway(state: GameState): void {
   state.buzzedPlayer = null;
   state.visualEffect = 'none';
   state.message = '';
-  state.currentPrize = WTW_WALKAWAY_OFFERS[state.wtwSongsWon + 1] ?? 0;
+  state.currentPrize = resolveWtwPrize(state, state.wtwSongsWon + 1);
 }
 
-// Host override: manually set which player is the survivor. Clears any currently set survivor.
+// Host override: manually set which player is the survivor. Snapshots their current banked
+// total so a bust later still pays out their pre-final earnings.
 export function wtwSetSurvivor(state: GameState, playerId: PlayerId): void {
   if (state.roundType !== 'win-the-wall') return;
   state.wtwSurvivor = playerId;
+  state.wtwStartingScore = state.players[playerId]?.score ?? 0;
 }
 
 // Get the current playing cell's wall coordinates (row 1-3, col 1-5) — for the wall renderer.

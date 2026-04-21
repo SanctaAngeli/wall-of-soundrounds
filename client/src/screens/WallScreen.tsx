@@ -47,7 +47,8 @@ export function WallScreen() {
     players, buzzedPlayer, visualEffect, songTitle, revealText, message,
     auctionBids, auctionWinner, auctionTimer, genre,
     showdownRows, showdownController, showdownLadder, showdownSongsPlayed, showdownTier,
-    wtwMusicianIndex, wtwSongsWon, wtwMusiciansThisSong, wtwCurrentOffer } = wallState;
+    wtwMusicianIndex, wtwSongsWon, wtwMusiciansThisSong, wtwCurrentOffer,
+    wtwStartingScore, wtwPrizes, showScoresOverlay, demoMode } = wallState;
   const PLAYER_COLORS: Record<1 | 2 | 3, string> = { 1: '#00d4ff', 2: '#ff00aa', 3: '#ff8c00' };
 
   return (
@@ -213,14 +214,19 @@ export function WallScreen() {
               {showdownRows.map(r => (
                 <div key={r.row} style={{
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  opacity: r.selected ? 1 : r.songId ? 0.35 : 0.08,
+                  opacity: r.selected ? 1 : r.songId ? 0.85 : 0.1,
                   transition: 'opacity 0.4s ease',
                 }}>
                   <div style={{
                     fontFamily: 'Montserrat', fontWeight: 900,
                     fontSize: 'clamp(2.5rem, 7vw, 6rem)',
-                    color: r.selected ? '#ffd700' : '#60607a',
-                    textShadow: r.selected ? '0 0 40px #ffd70080, 0 0 80px #ffd70040' : 'none',
+                    // Every year label is gold now — selected row just glows stronger so the
+                    // picked year still reads as "the active one" but the others stay fully
+                    // legible on-camera.
+                    color: '#ffd700',
+                    textShadow: r.selected
+                      ? '0 0 40px #ffd700cc, 0 0 80px #ffd70080'
+                      : '0 0 16px #ffd70040',
                     letterSpacing: '0.05em',
                   }}>
                     {r.year || '—'}
@@ -285,32 +291,39 @@ export function WallScreen() {
             position: 'absolute', top: '80px', right: '40px', zIndex: 10,
             display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3,
           }}>
-            {[
-              // Full 6-tier ladder. Gates (3, 5, 6) pay out; others are milestones only.
-              { songs: 6, prize: 1_000_000, gate: true },
-              { songs: 5, prize: 100_000,   gate: true },
-              { songs: 4, prize: 75_000,    gate: false },
-              { songs: 3, prize: 50_000,    gate: true },
-              { songs: 2, prize: 10_000,    gate: false },
-              { songs: 1, prize: 1_000,     gate: false },
-            ].map(tier => {
-              const reached = (wtwSongsWon ?? 0) >= tier.songs;
-              const isOffer = phase === 'wtw-walkaway-offer' && wtwCurrentOffer === tier.prize;
-              const width = 100 + tier.songs * 20;
-              return (
-                <div key={tier.songs} style={{
-                  width: `${width}px`, padding: '4px 12px',
-                  background: reached ? '#ffd70033' : isOffer ? '#ffd70055' : '#0a0a1a99',
-                  border: `1px solid ${reached ? '#ffd700' : isOffer ? '#ffd700' : tier.gate ? '#666' : '#333'}`,
-                  borderRadius: 4, textAlign: 'center',
-                  fontFamily: 'Montserrat', fontSize: '0.8rem', fontWeight: 800,
-                  color: reached ? '#ffd700' : isOffer ? '#ffd700' : tier.gate ? '#bbb' : '#777',
-                }}>
-                  {formatMoney(tier.prize)}
-                  {tier.gate && !reached && <span style={{ fontSize: '0.55rem', opacity: 0.7, marginLeft: 6 }}>GATE</span>}
-                </div>
-              );
-            })}
+            {(() => {
+              // 3 paying gates (3, 5, 6) pull their values from the resolved host config.
+              // Songs 1, 2, 4 are blank by design — no walkaway, no milestone cash.
+              const g3 = wtwPrizes?.gate3 ?? 50_000;
+              const g5 = wtwPrizes?.gate5 ?? 100_000;
+              const g6 = wtwPrizes?.gate6 ?? 250_000;
+              return [
+                { songs: 6, prize: g6 },
+                { songs: 5, prize: g5 },
+                { songs: 4, prize: null },
+                { songs: 3, prize: g3 },
+                { songs: 2, prize: null },
+                { songs: 1, prize: null },
+              ].map(tier => {
+                const reached = (wtwSongsWon ?? 0) >= tier.songs;
+                const isOffer = phase === 'wtw-walkaway-offer' && tier.prize != null && wtwCurrentOffer === tier.prize;
+                const isPaying = tier.prize != null;
+                const width = 100 + tier.songs * 20;
+                return (
+                  <div key={tier.songs} style={{
+                    width: `${width}px`, padding: '4px 12px',
+                    background: reached ? '#ffd70033' : isOffer ? '#ffd70055' : '#0a0a1a99',
+                    border: `1px solid ${reached ? '#ffd700' : isOffer ? '#ffd700' : isPaying ? '#666' : '#222'}`,
+                    borderRadius: 4, textAlign: 'center',
+                    fontFamily: 'Montserrat', fontSize: '0.8rem', fontWeight: 800,
+                    color: reached ? '#ffd700' : isOffer ? '#ffd700' : isPaying ? '#bbb' : '#444',
+                    animation: isOffer ? 'glow-pulse 1s ease-in-out infinite' : 'none',
+                  }}>
+                    {isPaying ? formatMoney(tier.prize!) : '—'}
+                  </div>
+                );
+              });
+            })()}
           </div>
           {/* Musician-this-song indicator */}
           <div style={{
@@ -351,13 +364,19 @@ export function WallScreen() {
               padding: '40px 80px', zIndex: 40,
               boxShadow: '0 0 120px #ffd700',
               animation: 'scale-in 0.5s ease-out',
+              textAlign: 'center',
             }}>
               <div style={{ fontSize: '0.9rem', color: '#1a1a1a', fontWeight: 900, letterSpacing: '0.3em' }}>
                 JACKPOT
               </div>
               <div style={{ fontSize: 'clamp(3rem, 10vw, 7rem)', fontWeight: 900, color: '#1a1a1a', margin: '8px 0' }}>
-                $1,000,000
+                +{formatMoney(wtwPrizes?.gate6 ?? 250_000)}
               </div>
+              {wtwStartingScore != null && wtwStartingScore > 0 && (
+                <div style={{ fontSize: '0.9rem', color: '#1a1a1a', fontWeight: 700, opacity: 0.8 }}>
+                  On top of {formatMoney(wtwStartingScore)} banked
+                </div>
+              )}
             </div>
           )}
           {phase === 'wtw-bust' && (
@@ -366,11 +385,14 @@ export function WallScreen() {
               background: '#2a0000', border: '3px solid #ff4444', borderRadius: 16,
               padding: '24px 48px', zIndex: 40, textAlign: 'center',
             }}>
-              <div style={{ fontSize: 'clamp(1.5rem, 4vw, 2.5rem)', fontWeight: 900, color: '#ff4444' }}>
+              <div style={{ fontSize: 'clamp(1.3rem, 3vw, 2rem)', fontWeight: 900, color: '#ff4444' }}>
                 OUT OF MUSICIANS
               </div>
-              <div style={{ fontSize: '1rem', color: '#ff8888', marginTop: 8 }}>
-                Walk away with nothing
+              <div style={{ fontSize: 'clamp(1rem, 2vw, 1.5rem)', color: '#ffd700', marginTop: 10, fontWeight: 800 }}>
+                Walk away with {formatMoney(wtwStartingScore ?? 0)}
+              </div>
+              <div style={{ fontSize: '0.7rem', color: '#ff8888', marginTop: 6 }}>
+                (banked from earlier rounds)
               </div>
             </div>
           )}
@@ -551,6 +573,94 @@ export function WallScreen() {
                     {p.name}
                   </div>
                   <div style={{ fontSize: '2rem', fontWeight: 900 }}>{formatMoney(p.score)}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ============================================ */}
+      {/* DEMO BADGE — always visible when demoMode on  */}
+      {/* ============================================ */}
+      {demoMode && phase !== 'lobby' && (
+        <div style={{
+          position: 'absolute', top: 14, right: 14, zIndex: 60,
+          background: 'linear-gradient(135deg, #ff8c00, #ff4444)',
+          color: '#fff',
+          padding: '6px 14px',
+          borderRadius: 6,
+          fontFamily: 'Montserrat', fontWeight: 900,
+          fontSize: 'clamp(0.7rem, 1vw, 0.9rem)',
+          letterSpacing: '0.3em',
+          boxShadow: '0 0 20px #ff8c0080',
+          border: '2px solid #fff',
+          animation: 'glow-pulse 2s ease-in-out infinite',
+        }}>
+          DEMO
+        </div>
+      )}
+
+      {/* ============================================ */}
+      {/* HOST-TRIGGERED SCORES OVERLAY                 */}
+      {/* ============================================ */}
+      {/* Dark-over-everything curtain with big scoreboard. Host can trigger at any phase as a  */}
+      {/* narrative "let's see where we are" beat. Audio and round state keep running          */}
+      {/* underneath — this is purely a visual overlay.                                        */}
+      {showScoresOverlay && (
+        <div style={{
+          position: 'absolute', inset: 0, zIndex: 90,
+          background: 'radial-gradient(ellipse at center, #0a0a1aee 0%, #000000f5 70%)',
+          display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center',
+          gap: 'clamp(20px, 4vh, 40px)',
+          animation: 'scale-in 0.35s ease-out',
+        }}>
+          <div style={{
+            fontFamily: 'Montserrat', fontSize: 'clamp(1rem, 2.2vw, 1.8rem)', fontWeight: 900,
+            color: '#ffd700', letterSpacing: '0.35em',
+            textShadow: '0 0 30px #ffd70080',
+          }}>
+            WHERE WE STAND
+          </div>
+          <div style={{
+            display: 'flex', flexDirection: 'column', gap: 'clamp(10px, 2vh, 20px)',
+            width: 'min(90vw, 900px)',
+          }}>
+            {([1, 2, 3] as const).map(pid => {
+              const color = pid === 1 ? '#00d4ff' : pid === 2 ? '#ff00aa' : '#ff8c00';
+              const p = players[pid];
+              return (
+                <div key={pid} style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  padding: 'clamp(14px, 2.5vw, 26px) clamp(22px, 3.5vw, 40px)',
+                  background: `linear-gradient(90deg, ${color}22 0%, ${color}08 100%)`,
+                  border: `2px solid ${p.eliminated ? '#555' : color}`,
+                  borderRadius: '14px',
+                  boxShadow: p.eliminated ? 'none' : `0 0 30px ${color}50`,
+                  opacity: p.eliminated ? 0.4 : 1,
+                }}>
+                  <div style={{
+                    fontFamily: 'Montserrat', fontWeight: 900,
+                    fontSize: 'clamp(1.4rem, 3.5vw, 2.8rem)',
+                    color,
+                    letterSpacing: '0.04em',
+                    textDecoration: p.eliminated ? 'line-through' : 'none',
+                  }}>
+                    {p.name}
+                    {p.eliminated && <span style={{
+                      marginLeft: 16, fontSize: '0.6em', color: '#888',
+                      fontWeight: 700, letterSpacing: '0.3em',
+                    }}>OUT</span>}
+                  </div>
+                  <div style={{
+                    fontFamily: 'Montserrat', fontWeight: 900,
+                    fontSize: 'clamp(1.8rem, 5vw, 4rem)',
+                    color: '#ffd700',
+                    textShadow: '0 0 20px #ffd70060',
+                  }}>
+                    {formatMoney(p.score)}
+                  </div>
                 </div>
               );
             })}

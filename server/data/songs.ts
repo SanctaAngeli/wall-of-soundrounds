@@ -400,18 +400,43 @@ const legacyLibrary: Song[] = [
 
 export const songLibrary: Song[] = [...wosLibrary, ...legacyLibrary];
 
-// Pre-configured song sets per round
+// Pre-configured song sets per round.
+// Each active round carries +2 "backup" songs beyond what's actually played live, so the
+// producer always has alternates ready if a song fails on-air or no one can guess it.
+// Round runtime still only consumes as many as the round needs (R1 plays first 5, Showdown
+// plays 6, WTW needs 6 correct, etc.). R2 (parked) and R4 (separate data model via
+// partsColumnQuestions) are not expanded.
 export const roundSongSets: Record<RoundType, string[]> = {
-  // 5 to 1: song 1 plays 5 stems ($1k), song 5 plays 1 stem ($5k). Final position needs an iconic drum pattern.
-  '5to1': ['let-it-go', 'i-dont-want-to-miss-a-thing', 'tik-tok', 'mr-blue-sky', 'superstition'],
-  // another-level: roundSongs tracks the 9 songs assigned to the 9 groups (anotherLevelSongs below is authoritative)
+  // 5 to 1: plays first 5 songs. 5 + 2 alternates = 7 in the lineup.
+  // Song 1 plays 5 stems ($1k), song 5 plays 1 stem ($5k). Final position needs an iconic drum pattern.
+  '5to1': [
+    'let-it-go',
+    'i-dont-want-to-miss-a-thing',
+    'tik-tok',
+    'mr-blue-sky',
+    'superstition',
+    'radio-gaga',             // alternate
+    'never-gonna-give-you-up',// alternate
+  ],
+  // another-level: roundSongs tracks the 9 songs assigned to the 9 groups (anotherLevelSongs below is authoritative).
+  // PARKED — not expanded.
   'another-level': ['tainted-love', 'womanizer', 'should-i-stay-or-should-i-go-now', 'just-cant-get-enough',
                     'rocket-man', 'kiss-froma-rose', 'i-cant-help-myself', 'the-joker', 'lion-king'],
-  'music-auction': ['humble', 'livin-la-vida-loca', 'johnny-b-goode', 'virtual-insanity'],
-  // song-in-5-parts: overridden at runtime from partsQuestions targets; listed here for completeness
+  // music-auction: previously 4-song pool → now 6 so the producer has genre variety on standby.
+  'music-auction': [
+    'humble',
+    'livin-la-vida-loca',
+    'johnny-b-goode',
+    'virtual-insanity',
+    'the-joker',              // alternate
+    'i-want-your-love',       // alternate
+  ],
+  // song-in-5-parts: overridden at runtime from partsQuestions targets; kept minimal here.
+  // NOT expanded — R4 has its own 5-column target/decoy schema (see partsColumnQuestions).
   'song-in-5-parts': ['thescientist', 'break-my-heart', 'zombie', 'love-story', 'we-didnt-start-the-fire'],
-  // Song Showdown: 6 curated songs with distinct years. 3 visible at once + 3 replacements as they're played.
-  // Picked to span ≥60 years of music so every contestant has a recognisable decade.
+  // Song Showdown: plays 6 songs. 6 + 2 alternates = 8 in the lineup so the reserve always has
+  // replacement years ready if the first picks don't land with the contestants.
+  // Years chosen to span ≥65 years of music so every contestant has a recognisable decade.
   'song-showdown': [
     'johnny-b-goode',         // 1958 — rock & roll
     'the-joker',              // 1973 — rock
@@ -419,9 +444,12 @@ export const roundSongSets: Record<RoundType, string[]> = {
     'oops-i-did-it-again',    // 2000 — pop
     'thank-you-next',         // 2018 — pop
     'paint-the-town-red',     // 2023 — hip-hop
+    'livin-la-vida-loca',     // 1999 — alternate
+    'tik-tok',                // 2009 — alternate
   ],
-  // Win the Wall: endgame solo round. Need 6 correct to hit the $1m jackpot; lineup carries 8 for
-  // alternates. Ordered easiest → hardest so early songs can be cleared fast (saving musicians).
+  // Win the Wall: needs 6 correct to hit the jackpot (default $250k). 6 + 2 from before
+  // + 2 more new alternates = 10 in the lineup. Ordered easiest → hardest so early songs can
+  // be cleared fast, saving musicians for the harder back half.
   'win-the-wall': [
     'tik-tok',                // 2009
     'never-gonna-give-you-up',// 1987
@@ -431,6 +459,8 @@ export const roundSongSets: Record<RoundType, string[]> = {
     'superstition',           // 1972
     'radio-gaga',             // 1984 — alternate
     'virtual-insanity',       // 1996 — alternate
+    'toxic',                  // 2003 — alternate
+    'love-story',             // 2008 — alternate
   ],
 };
 
@@ -448,26 +478,16 @@ export const roundPrizes: Record<RoundType, number[]> = {
   'win-the-wall': [0, 0, 0, 50000, 50000, 100000], // walkaway values keyed by (songsWon after the song)
 };
 
-// Win the Wall ladder milestones (songsWon count → cash offer).
-// Gates (3, 5, 6) trigger an explicit walkaway decision phase on the host + wall.
-// Between-gate tiers (1, 2, 4) are display-only milestones so the pyramid shows progress;
-// the survivor keeps playing through them without a walkaway choice.
-export const WTW_WALKAWAY_OFFERS: Record<number, number> = {
-  3: 50000,
-  5: 100000,
-  6: 1_000_000,
-};
-
-// Full 6-tier cash ladder for the pyramid display. Gate values (3/5/6) must match
-// WTW_WALKAWAY_OFFERS above so the wall doesn't show a different number from what the host
-// offers. Between-tier values are nominal milestones only.
-export const WTW_TIER_VALUES: Record<number, number> = {
-  1: 1_000,
-  2: 10_000,
-  3: 50_000,    // walkaway gate
-  4: 75_000,
-  5: 100_000,   // walkaway gate
-  6: 1_000_000, // jackpot
+// Win the Wall cash milestones. Only 3 tiers pay out: song 3, song 5, song 6.
+// Songs 1, 2, 4 are blank on the pyramid (no walkaway offer, no jackpot milestone).
+// The amounts below are DEFAULTS — host can override per-show via GameConfig.winTheWallPrizes.
+// All amounts are ADDITIVE on top of whatever the survivor banked in R1–R5 (i.e. the series
+// total keeps growing; the final can only add to it, never subtract). If they bust before a
+// gate, they still walk with whatever they brought into the final — see wtwStartingScore.
+export const WTW_WALKAWAY_OFFERS_DEFAULT: Record<number, number> = {
+  3: 50_000,
+  5: 100_000,
+  6: 250_000,
 };
 
 // Win the Wall snake path through the 15 cells: bottom row L→R → middle row R→L → top row L→R.

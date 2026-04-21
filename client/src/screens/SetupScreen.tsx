@@ -278,7 +278,7 @@ export function SetupScreen() {
                   Grab a song from the library and drag it over to the <strong>Round Lineups</strong> panel on the right.
                   A dashed outline will appear — drop it inside to add it. Pick the round tab at the top first —
                   there are six rounds now including <strong>Song Showdown</strong> (opener, 3 players, 6 songs across different
-                  years) and <strong>Win the Wall</strong> (endgame, one survivor, $1m jackpot).
+                  years) and <strong>Win the Wall</strong> (endgame, one survivor, configurable jackpot).
                 </div>
               </div>
             </div>
@@ -806,6 +806,167 @@ export function SetupScreen() {
                           <button onClick={() => moveInRound(round, i, 1)} disabled={i === ids.length - 1} style={S.moveBtn}>▼</button>
                           <button onClick={() => removeFromRound(round, i)} style={{ ...S.moveBtn, color: '#ff6666' }}>✕</button>
                         </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Demo lineup for any round — a short (3-song) alternate the host can run as a dry-run.
+              Without a configured demo, the first 3 songs of the main lineup are used. Shown for
+              all tabs where the drop-zone editor applies (R1 / R3 / Showdown / WTW). */}
+          {(activeRoundTab === '5to1' || activeRoundTab === 'music-auction' || activeRoundTab === 'song-showdown' || activeRoundTab === 'win-the-wall') && (() => {
+            const round = activeRoundTab;
+            const demoIds = config.demoLineup?.[round] ?? [];
+            const effectiveDemo = demoIds.length > 0
+              ? demoIds
+              : resolveLineup(round).slice(0, 3);
+            const isHot = dragOverRound === `${round}-demo`;
+            const dropId = `${round}-demo`;
+            return (
+              <div
+                onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setDragOverRound(dropId); }}
+                onDragLeave={() => setDragOverRound(null)}
+                onDrop={e => {
+                  e.preventDefault();
+                  setDragOverRound(null);
+                  const songId = e.dataTransfer.getData('application/x-wos-song');
+                  if (!songId) return;
+                  const current = config.demoLineup?.[round] ?? [];
+                  if (current.includes(songId)) return;
+                  emit('host:config-set-demo-lineup', { round, songIds: [...current, songId] });
+                }}
+                style={{
+                  marginTop: '14px', padding: '10px',
+                  background: isHot ? '#ff8c0015' : '#0a0a1a',
+                  border: isHot ? '2px dashed #ff8c00' : '1px dashed #ff8c0044',
+                  borderRadius: '8px',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '6px' }}>
+                  <div style={{ fontSize: '0.72rem', color: '#ff8c00', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                    Demo lineup (3 songs)
+                  </div>
+                  {demoIds.length > 0 && (
+                    <button
+                      onClick={() => emit('host:config-set-demo-lineup', { round, songIds: [] })}
+                      style={{ ...S.btn, background: '#333', color: '#aaa', fontSize: '0.6rem', padding: '3px 8px' }}
+                    >
+                      Clear (use first 3 of main lineup)
+                    </button>
+                  )}
+                </div>
+                <div style={{ fontSize: '0.65rem', color: '#8080a0', marginBottom: '8px', fontStyle: 'italic' }}>
+                  {demoIds.length > 0
+                    ? 'Custom demo set — used when the host clicks the DEMO chip on this round.'
+                    : 'No custom set — demo falls back to the first 3 songs of the main lineup. Drag songs here to override.'}
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  {effectiveDemo.map((id, i) => {
+                    const song = songById(id);
+                    const isCustom = demoIds.includes(id);
+                    return (
+                      <div key={`${id}-${i}`} style={{
+                        display: 'flex', alignItems: 'center', gap: '8px',
+                        padding: '5px 8px',
+                        background: isCustom ? '#ff8c0015' : '#1a1a3a88',
+                        border: `1px solid ${isCustom ? '#ff8c0066' : '#222'}`,
+                        borderRadius: '4px',
+                        fontSize: '0.72rem',
+                      }}>
+                        <span style={{ color: '#ff8c00', fontWeight: 800, minWidth: 14 }}>{i + 1}</span>
+                        <span style={{ flex: 1, color: '#fff' }}>{song?.title ?? id}</span>
+                        <span style={{ color: '#8080a0', fontSize: '0.65rem' }}>{song?.artist ?? ''}</span>
+                        {isCustom && (
+                          <button
+                            onClick={() => emit('host:config-set-demo-lineup', { round, songIds: demoIds.filter(x => x !== id) })}
+                            style={{ background: 'none', border: 'none', color: '#ff6666', cursor: 'pointer', fontSize: '0.8rem', padding: 0 }}
+                            title="Remove from demo lineup"
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {effectiveDemo.length === 0 && (
+                    <div style={{ fontSize: '0.7rem', color: '#666', fontStyle: 'italic', padding: '8px' }}>
+                      No songs in main lineup either — drag some into the main pool above, or drop them here for a custom demo.
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Win the Wall: per-gate cash configuration.
+              3 paying tiers (songs 3, 5, 6). Each has a default; host can override per-show.
+              Clearing the input reverts that tier to the default value. All values are ADDITIVE
+              on top of whatever the survivor banked in earlier rounds. */}
+          {activeRoundTab === 'win-the-wall' && (() => {
+            const gates: { milestone: 3 | 5 | 6; label: string; def: number }[] = [
+              { milestone: 3, label: 'Song 3 walkaway',  def: 50_000  },
+              { milestone: 5, label: 'Song 5 walkaway',  def: 100_000 },
+              { milestone: 6, label: 'Song 6 JACKPOT',   def: 250_000 },
+            ];
+            return (
+              <div style={{ marginTop: '14px', padding: '12px', background: '#0a0a1a', border: '1px solid #ffd70044', borderRadius: '8px' }}>
+                <div style={{ fontSize: '0.72rem', color: '#ffd700', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '8px' }}>
+                  Cash ladder (host-configurable)
+                </div>
+                <div style={{ fontSize: '0.65rem', color: '#8080a0', marginBottom: '10px', fontStyle: 'italic' }}>
+                  Only 3 paying tiers. Songs 1, 2, 4 are blank by design. These amounts are on top of whatever the survivor banked in earlier rounds.
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {gates.map(g => {
+                    const override = config.winTheWallPrizes?.[g.milestone];
+                    const effective = override ?? g.def;
+                    return (
+                      <div key={g.milestone} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#a0a0b0', minWidth: '160px' }}>
+                          {g.label}
+                        </span>
+                        <span style={{ color: '#8080a0', fontWeight: 700 }}>$</span>
+                        <input
+                          type="number"
+                          min={0}
+                          step={1000}
+                          defaultValue={effective}
+                          key={`wtw-gate-${g.milestone}-${override ?? 'default'}`}
+                          onBlur={e => {
+                            const raw = e.target.value.trim();
+                            if (!raw) {
+                              emit('host:config-set-wtw-prizes', { [`gate${g.milestone}`]: null } as any);
+                            } else {
+                              const n = Number(raw);
+                              if (Number.isFinite(n) && n >= 0) {
+                                emit('host:config-set-wtw-prizes', { [`gate${g.milestone}`]: n } as any);
+                              }
+                            }
+                          }}
+                          style={{
+                            flex: 1, padding: '6px 8px',
+                            background: override != null ? '#ffd70015' : '#1a1a3a',
+                            border: `1px solid ${override != null ? '#ffd70088' : '#333'}`,
+                            borderRadius: '4px', color: '#fff', fontSize: '0.85rem',
+                            fontFamily: 'monospace', fontWeight: 700,
+                          }}
+                        />
+                        {override != null && (
+                          <button
+                            onClick={() => emit('host:config-set-wtw-prizes', { [`gate${g.milestone}`]: null } as any)}
+                            title={`Reset to default ($${g.def.toLocaleString()})`}
+                            style={{
+                              padding: '4px 10px', fontSize: '0.6rem', fontWeight: 700,
+                              background: 'transparent', color: '#ff8c00',
+                              border: '1px solid #ff8c0066', borderRadius: '4px', cursor: 'pointer',
+                            }}
+                          >
+                            RESET
+                          </button>
+                        )}
                       </div>
                     );
                   })}

@@ -44,7 +44,11 @@ import {
   setSongYearOverride,
   setShowdownLineup,
   setWtwLineup,
+  setWtwPrizes,
   setPlayerEliminated,
+  setScore,
+  setScoresOverlay,
+  setDemoLineup,
   resetConfig,
   importConfig,
   // Song Showdown
@@ -193,10 +197,10 @@ export function setupSocketHandlers(io: Server, state: GameState) {
         : state.currentSong.stems;
     };
 
-    socket.on('host:select-round', (data: { round: RoundType }) => {
+    socket.on('host:select-round', (data: { round: RoundType; demo?: boolean }) => {
       // Stop any audio from the previous round
       sendAudioCommand(io, { action: 'stop' });
-      selectRound(state, data.round);
+      selectRound(state, data.round, { demo: !!data.demo });
       // Send audio load command
       if (data.round === 'song-in-5-parts') {
         sendPartsLoadCommand(io, state);
@@ -329,6 +333,16 @@ export function setupSocketHandlers(io: Server, state: GameState) {
 
     socket.on('host:config-set-wtw-lineup', (data: { songIds: string[] }) => {
       setWtwLineup(state, data.songIds);
+      broadcastState(io, state);
+    });
+
+    socket.on('host:config-set-wtw-prizes', (data: { gate3?: number | null; gate5?: number | null; gate6?: number | null }) => {
+      setWtwPrizes(state, data);
+      broadcastState(io, state);
+    });
+
+    socket.on('host:config-set-demo-lineup', (data: { round: RoundType; songIds: string[] }) => {
+      setDemoLineup(state, data.round, data.songIds);
       broadcastState(io, state);
     });
 
@@ -504,8 +518,18 @@ export function setupSocketHandlers(io: Server, state: GameState) {
       broadcastState(io, state);
     });
 
+    socket.on('host:set-score', (data: { player: PlayerId; amount: number }) => {
+      setScore(state, data.player, data.amount);
+      broadcastState(io, state);
+    });
+
     socket.on('host:set-eliminated', (data: { player: PlayerId; eliminated: boolean }) => {
       setPlayerEliminated(state, data.player, data.eliminated);
+      broadcastState(io, state);
+    });
+
+    socket.on('host:toggle-scores-overlay', (data: { show: boolean }) => {
+      setScoresOverlay(state, !!data.show);
       broadcastState(io, state);
     });
 

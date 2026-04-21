@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useSocket } from '../hooks/useSocket';
 import { useAudioEngine } from '../hooks/useAudioEngine';
 import type { RoundType, HostState } from '@shared/types';
@@ -29,7 +30,8 @@ export function HostScreen() {
     showdownCurrentSongId, showdownSelectedRow,
     // Win the Wall
     wtwMusicianIndex, wtwSongsWon, wtwMusiciansThisSong, wtwSurvivor,
-    wtwCurrentSongId, wtwJackpotIfWon, wtwLineupSize } = hostState;
+    wtwCurrentSongId, wtwJackpotIfWon, wtwLineupSize, wtwStartingScore, wtwPrizes,
+    demoMode } = hostState;
 
   const isGameActive = phase !== 'lobby' && phase !== 'round-complete' && phase !== 'game-over';
   const PLAYER_COLORS: Record<1 | 2 | 3, string> = { 1: '#00d4ff', 2: '#ff00aa', 3: '#ff8c00' };
@@ -45,11 +47,40 @@ export function HostScreen() {
         <div style={styles.topCenter}>
           <span style={styles.phaseBadge}>{phase.toUpperCase().replace(/-/g, ' ')}</span>
           {roundType && <span style={styles.roundLabel}>{roundName}</span>}
+          {demoMode && (
+            <span style={{
+              marginLeft: 10,
+              padding: '3px 10px',
+              background: 'linear-gradient(135deg, #ff8c00, #ff4444)',
+              color: '#fff', fontWeight: 900, fontSize: '0.7rem', letterSpacing: '0.25em',
+              borderRadius: 4, border: '1px solid #fff4',
+              boxShadow: '0 0 12px #ff8c0080',
+              animation: 'glow-pulse 2s ease-in-out infinite',
+            }}>
+              DEMO
+            </span>
+          )}
         </div>
         <div style={styles.topRight}>
           <PlayerScoreChip name={players[1].name} score={players[1].score} color="#00d4ff" eliminated={players[1].eliminated} />
           <PlayerScoreChip name={players[2].name} score={players[2].score} color="#ff00aa" eliminated={players[2].eliminated} />
           <PlayerScoreChip name={players[3].name} score={players[3].score} color="#ff8c00" eliminated={players[3].eliminated} />
+          {/* Show-the-money overlay toggle. Visible from every phase — it's a narrative beat the
+              host can trigger any time. Lights up gold when the overlay is already showing. */}
+          <button
+            onClick={() => emit('host:toggle-scores-overlay', { show: !hostState.showScoresOverlay })}
+            style={{
+              padding: '6px 14px', fontSize: '0.7rem', fontWeight: 900, letterSpacing: '0.1em',
+              background: hostState.showScoresOverlay ? '#ffd700' : '#1a1a3a',
+              color: hostState.showScoresOverlay ? '#000' : '#ffd700',
+              border: `1px solid ${hostState.showScoresOverlay ? '#ffd700' : '#ffd70066'}`,
+              borderRadius: '16px', cursor: 'pointer',
+              marginLeft: 8,
+            }}
+            title="Toggle a full-wall scoreboard overlay so you can read out each player's running total"
+          >
+            {hostState.showScoresOverlay ? '✕ HIDE SCORES' : '💰 SHOW SCORES'}
+          </button>
         </div>
       </div>
 
@@ -94,12 +125,31 @@ export function HostScreen() {
 
             <div style={styles.section}>
               <h2 style={styles.sectionTitle}>Select Round</h2>
+              <div style={{ fontSize: '0.7rem', color: '#8080a0', marginBottom: 10 }}>
+                Click any round to start it live. Click the <span style={{ color: '#ff8c00', fontWeight: 800 }}>DEMO</span> chip on
+                a tile instead to run that round as a dry-run (scores and eliminations roll back when you leave).
+              </div>
               <div style={styles.roundGrid}>
                 {(['song-showdown', '5to1', 'another-level', 'music-auction', 'song-in-5-parts', 'win-the-wall'] as RoundType[]).map(r => (
-                  <button key={r} onClick={() => emit('host:select-round', { round: r })} style={styles.roundCard}>
-                    <div style={styles.roundCardTitle}>{ROUND_NAMES[r]}</div>
-                    <div style={styles.roundCardDesc}>{roundDescs[r]}</div>
-                  </button>
+                  <div key={r} style={{ position: 'relative' }}>
+                    <button onClick={() => emit('host:select-round', { round: r })} style={styles.roundCard}>
+                      <div style={styles.roundCardTitle}>{ROUND_NAMES[r]}</div>
+                      <div style={styles.roundCardDesc}>{roundDescs[r]}</div>
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); emit('host:select-round', { round: r, demo: true }); }}
+                      title={`Run ${ROUND_NAMES[r]} as a demo — no real score or elimination persists`}
+                      style={{
+                        position: 'absolute', top: 8, right: 8,
+                        padding: '3px 9px', fontSize: '0.6rem', fontWeight: 900, letterSpacing: '0.15em',
+                        background: 'linear-gradient(135deg, #ff8c00, #ff4444)',
+                        color: '#fff', border: '1px solid #fff4', borderRadius: 4,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      DEMO
+                    </button>
+                  </div>
                 ))}
               </div>
             </div>
@@ -276,36 +326,48 @@ export function HostScreen() {
                   </>
                 )}
 
-                {/* Prize pyramid — gates (3/5/6) trigger walkaway decisions; others are milestones */}
-                {phase !== 'round-intro' && (
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, marginBottom: 12 }}>
-                    {[
-                      { songs: 6, prize: 1_000_000, gate: true,  label: 'JACKPOT' },
-                      { songs: 5, prize: 100_000,   gate: true,  label: 'GATE' },
-                      { songs: 4, prize: 75_000,    gate: false, label: '' },
-                      { songs: 3, prize: 50_000,    gate: true,  label: 'GATE' },
-                      { songs: 2, prize: 10_000,    gate: false, label: '' },
-                      { songs: 1, prize: 1_000,     gate: false, label: '' },
-                    ].map(tier => {
-                      const reached = (wtwSongsWon ?? 0) >= tier.songs;
-                      const isNext = (wtwSongsWon ?? 0) + 1 === tier.songs;
-                      return (
-                        <div key={tier.songs} style={{
-                          width: `${40 + tier.songs * 10}%`,
-                          padding: '4px 10px',
-                          background: reached ? '#ffd70033' : isNext ? '#ffd70011' : 'transparent',
-                          border: `1px solid ${reached ? '#ffd700' : isNext ? '#ffd70066' : tier.gate ? '#666' : '#333'}`,
-                          borderRadius: 4, textAlign: 'center',
-                          fontSize: '0.8rem', fontWeight: 700,
-                          color: reached ? '#ffd700' : tier.gate ? '#bbb' : '#888',
-                        }}>
-                          Song {tier.songs} · {formatMoney(tier.prize)}
-                          {tier.label && <span style={{ fontSize: '0.6rem', opacity: 0.7, marginLeft: 8 }}>{tier.label}</span>}
+                {/* Prize pyramid — only 3 paying tiers (songs 3, 5, 6). 1/2/4 are blank. */}
+                {phase !== 'round-intro' && (() => {
+                  const g3 = wtwPrizes?.gate3 ?? 50_000;
+                  const g5 = wtwPrizes?.gate5 ?? 100_000;
+                  const g6 = wtwPrizes?.gate6 ?? 250_000;
+                  const tiers: { songs: number; prize: number | null; label: string }[] = [
+                    { songs: 6, prize: g6,   label: 'JACKPOT' },
+                    { songs: 5, prize: g5,   label: 'GATE' },
+                    { songs: 4, prize: null, label: '' },
+                    { songs: 3, prize: g3,   label: 'GATE' },
+                    { songs: 2, prize: null, label: '' },
+                    { songs: 1, prize: null, label: '' },
+                  ];
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, marginBottom: 12 }}>
+                      {tiers.map(tier => {
+                        const reached = (wtwSongsWon ?? 0) >= tier.songs;
+                        const isNext = (wtwSongsWon ?? 0) + 1 === tier.songs;
+                        const isPaying = tier.prize != null;
+                        return (
+                          <div key={tier.songs} style={{
+                            width: `${40 + tier.songs * 10}%`,
+                            padding: '4px 10px',
+                            background: reached ? '#ffd70033' : isNext ? '#ffd70011' : 'transparent',
+                            border: `1px solid ${reached ? '#ffd700' : isNext ? '#ffd70066' : isPaying ? '#666' : '#222'}`,
+                            borderRadius: 4, textAlign: 'center',
+                            fontSize: '0.8rem', fontWeight: 700,
+                            color: reached ? '#ffd700' : isPaying ? '#bbb' : '#555',
+                          }}>
+                            Song {tier.songs} · {isPaying ? formatMoney(tier.prize!) : '—'}
+                            {tier.label && <span style={{ fontSize: '0.6rem', opacity: 0.7, marginLeft: 8 }}>{tier.label}</span>}
+                          </div>
+                        );
+                      })}
+                      {(wtwStartingScore ?? 0) > 0 && (
+                        <div style={{ fontSize: '0.65rem', color: '#8080a0', marginTop: 4, fontStyle: 'italic' }}>
+                          All prizes are on top of {formatMoney(wtwStartingScore!)} banked from earlier rounds
                         </div>
-                      );
-                    })}
-                  </div>
-                )}
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {/* Walkaway offer */}
                 {phase === 'wtw-walkaway-offer' && (
@@ -349,14 +411,15 @@ export function HostScreen() {
                   <div style={{ textAlign: 'center', padding: 20, background: 'linear-gradient(135deg, #ffd70033, #ff8c0033)', borderRadius: 8, border: '2px solid #ffd700' }}>
                     <div style={{ fontSize: '1.4rem', fontWeight: 900, color: '#ffd700' }}>JACKPOT!</div>
                     <div style={{ fontSize: '1.1rem', marginTop: 6 }}>
-                      {wtwSurvivor && players[wtwSurvivor].name} wins {formatMoney(1_000_000)}
+                      {wtwSurvivor && players[wtwSurvivor].name} wins {formatMoney(wtwPrizes?.gate6 ?? 250_000)}
+                      {(wtwStartingScore ?? 0) > 0 && <span style={{ color: '#a0a0b0', fontSize: '0.85rem' }}> + {formatMoney(wtwStartingScore!)} banked</span>}
                     </div>
                   </div>
                 )}
                 {phase === 'wtw-bust' && (
                   <div style={{ textAlign: 'center', padding: 16, background: '#2a0000', borderRadius: 8, border: '1px solid #ff4444' }}>
                     <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#ff6666' }}>
-                      BUST — walked away with nothing
+                      BUST — walks with {formatMoney(wtwStartingScore ?? 0)} from earlier rounds
                     </div>
                   </div>
                 )}
@@ -1078,6 +1141,7 @@ export function HostScreen() {
                     name={players[pid].name} score={players[pid].score} color={colors[pid]}
                     eliminated={players[pid].eliminated}
                     onAdjust={(d) => emit('host:adjust-score', { player: pid, delta: d })}
+                    onSetExact={(amount) => emit('host:set-score', { player: pid, amount })}
                     onToggleEliminated={() => emit('host:set-eliminated', { player: pid, eliminated: !players[pid].eliminated })}
                   />
                 );
@@ -1170,11 +1234,22 @@ function PlayerScoreChip({ name, score, color, eliminated }: { name: string; sco
   );
 }
 
-function ScoreControl({ name, score, color, eliminated, onAdjust, onToggleEliminated }: {
+function ScoreControl({ name, score, color, eliminated, onAdjust, onSetExact, onToggleEliminated }: {
   name: string; score: number; color: string; eliminated?: boolean;
   onAdjust: (delta: number) => void;
+  onSetExact?: (amount: number) => void;
   onToggleEliminated?: () => void;
 }) {
+  const [exactInput, setExactInput] = useState('');
+  const commitExact = () => {
+    const raw = exactInput.trim();
+    // Empty input = no-op (per spec: zero not allowed as a silent overwrite)
+    if (!raw) return;
+    const n = Number(raw.replace(/[^0-9.\-]/g, ''));
+    if (!Number.isFinite(n)) return;
+    onSetExact?.(n);
+    setExactInput('');
+  };
   return (
     <div style={{
       flex: '1 1 140px', minWidth: '140px',
@@ -1198,6 +1273,39 @@ function ScoreControl({ name, score, color, eliminated, onAdjust, onToggleElimin
           </button>
         ))}
       </div>
+      {onSetExact && (
+        <div style={{ display: 'flex', gap: '4px', marginTop: '6px' }}>
+          <input
+            type="text"
+            inputMode="numeric"
+            placeholder="Set exact $"
+            value={exactInput}
+            onChange={e => setExactInput(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') commitExact(); }}
+            style={{
+              flex: 1, minWidth: 0, padding: '4px 6px', fontSize: '0.7rem',
+              background: '#0a0a1a', color: '#fff',
+              border: '1px solid #333', borderRadius: '4px',
+              fontFamily: 'monospace',
+            }}
+          />
+          <button
+            onClick={commitExact}
+            disabled={!exactInput.trim()}
+            style={{
+              padding: '4px 8px', fontSize: '0.65rem', fontWeight: 800,
+              background: exactInput.trim() ? color : '#333',
+              color: exactInput.trim() ? '#000' : '#666',
+              border: 'none', borderRadius: '4px',
+              cursor: exactInput.trim() ? 'pointer' : 'not-allowed',
+              letterSpacing: '0.05em',
+            }}
+            title="Replace the player's score with this exact amount"
+          >
+            SET
+          </button>
+        </div>
+      )}
       {onToggleEliminated && (
         <button onClick={onToggleEliminated} style={{
           marginTop: '6px', width: '100%',
@@ -1220,7 +1328,7 @@ const roundDescs: Record<RoundType, string> = {
   'music-auction': 'Musicians make offers, players secretly bid. Fewest musicians wins!',
   'song-in-5-parts': '3 songs scattered across 15 cells. Find the target (announced first). Vocals revealed first, then guitar → drums.',
   'song-showdown': 'Opener, 3 players. Each row = a year. Musicians join every 5s, cash drops as they join. First to buzz banks + picks next year. 6 songs, lowest eliminated.',
-  'win-the-wall': 'Solo endgame. Snake through 15 musicians, 6 songs for $1m. Walkaway gates at 3 ($50k) and 5 ($100k). Burn all 15 = walk with nothing.',
+  'win-the-wall': 'Solo endgame. Snake through 15 musicians, 6 songs for the jackpot (default $250k). Walkaway gates at 3 ($50k) and 5 ($100k). Bust = keep what you banked in earlier rounds. Amounts configurable in /setup.',
 };
 
 const styles: Record<string, React.CSSProperties> = {
