@@ -44,6 +44,7 @@ import {
   setSongYearOverride,
   setShowdownLineup,
   setWtwLineup,
+  setPlayerEliminated,
   resetConfig,
   importConfig,
   // Song Showdown
@@ -500,6 +501,11 @@ export function setupSocketHandlers(io: Server, state: GameState) {
 
     socket.on('host:adjust-score', (data: { player: PlayerId; delta: number }) => {
       adjustScore(state, data.player, data.delta);
+      broadcastState(io, state);
+    });
+
+    socket.on('host:set-eliminated', (data: { player: PlayerId; eliminated: boolean }) => {
+      setPlayerEliminated(state, data.player, data.eliminated);
       broadcastState(io, state);
     });
 

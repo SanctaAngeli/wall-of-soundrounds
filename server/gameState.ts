@@ -1187,7 +1187,11 @@ export function playerBuzz(state: GameState, playerId: PlayerId): boolean {
   if (!buzzablePhases.includes(state.phase) || state.buzzedPlayer !== null) return false;
   // Eliminated players can't buzz at all.
   if (state.players[playerId]?.eliminated) return false;
-  // R4: player locked out for the current column can't buzz (R4 is 2-player; player 3 is already eliminated by then)
+  // R3 Music Auction + R4 Song in 5 Parts are strictly 2-player. Player 3 can't buzz regardless
+  // of their eliminated flag — belt-and-braces so a forgotten-to-eliminate P3 can't deadlock
+  // those rounds' 2-player scoring code (which is typed 1|2 throughout).
+  if ((state.roundType === 'music-auction' || state.roundType === 'song-in-5-parts') && playerId === 3) return false;
+  // R4: player locked out for the current column can't buzz
   if (state.roundType === 'song-in-5-parts' && (playerId === 1 || playerId === 2) && state.partsLockedPlayers.includes(playerId)) return false;
   // Song Showdown: wrong-buzz lockout applies per song
   if (state.roundType === 'song-showdown' && state.showdownLockedPlayers.includes(playerId)) return false;
@@ -1288,6 +1292,27 @@ export function adjustScore(state: GameState, player: PlayerId, delta: number): 
 
 export function setPlayerName(state: GameState, player: PlayerId, name: string): void {
   state.players[player].name = name;
+}
+
+// Manual eliminate toggle. Used when:
+//  - Song Showdown ends in a tie (auto-eliminate skips ties, host picks the loser)
+//  - Host wants to skip Showdown entirely and start mid-show with 2 players
+//  - Producer needs to mark someone out between takes
+export function setPlayerEliminated(state: GameState, player: PlayerId, eliminated: boolean): void {
+  state.players[player].eliminated = eliminated;
+  // If a currently-buzzed player gets eliminated, clear their buzz so play can continue.
+  if (eliminated && state.buzzedPlayer === player) {
+    state.buzzedPlayer = null;
+  }
+  // If the Win the Wall survivor gets eliminated, unassign them so host must re-pick.
+  if (eliminated && state.roundType === 'win-the-wall' && state.wtwSurvivor === player) {
+    state.wtwSurvivor = null;
+  }
+  // If the Song Showdown controller gets eliminated mid-round, punt to another active player
+  // so the game doesn't stall.
+  if (eliminated && state.roundType === 'song-showdown' && state.showdownControllerPlayer === player) {
+    state.showdownControllerPlayer = pickRandomActivePlayer(state);
+  }
 }
 
 export function endRound(state: GameState): void {

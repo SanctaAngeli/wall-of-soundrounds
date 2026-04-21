@@ -291,6 +291,9 @@ export interface ClientEvents {
   'host:give-to-other': {};
   'host:next-song': {};
   'host:adjust-score': { player: PlayerId; delta: number };
+  // Manually flip a player's eliminated flag. Used to resolve showdown ties or to skip the
+  // opener and go straight to 2-player rounds with a pre-chosen elimination.
+  'host:set-eliminated': { player: PlayerId; eliminated: boolean };
   'host:end-round': {};
   'host:reset': {};
   'host:set-stem': { stemId: number; active: boolean };

@@ -1071,15 +1071,20 @@ export function HostScreen() {
           <div style={styles.section}>
             <h2 style={styles.sectionTitle}>Scores</h2>
             <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-              <ScoreControl name={players[1].name} score={players[1].score} color="#00d4ff"
-                eliminated={players[1].eliminated}
-                onAdjust={(d) => emit('host:adjust-score', { player: 1, delta: d })} />
-              <ScoreControl name={players[2].name} score={players[2].score} color="#ff00aa"
-                eliminated={players[2].eliminated}
-                onAdjust={(d) => emit('host:adjust-score', { player: 2, delta: d })} />
-              <ScoreControl name={players[3].name} score={players[3].score} color="#ff8c00"
-                eliminated={players[3].eliminated}
-                onAdjust={(d) => emit('host:adjust-score', { player: 3, delta: d })} />
+              {([1, 2, 3] as const).map(pid => {
+                const colors: Record<1 | 2 | 3, string> = { 1: '#00d4ff', 2: '#ff00aa', 3: '#ff8c00' };
+                return (
+                  <ScoreControl key={pid}
+                    name={players[pid].name} score={players[pid].score} color={colors[pid]}
+                    eliminated={players[pid].eliminated}
+                    onAdjust={(d) => emit('host:adjust-score', { player: pid, delta: d })}
+                    onToggleEliminated={() => emit('host:set-eliminated', { player: pid, eliminated: !players[pid].eliminated })}
+                  />
+                );
+              })}
+            </div>
+            <div style={{ fontSize: '0.65rem', color: '#606080', marginTop: '8px', fontStyle: 'italic' }}>
+              Use <b style={{ color: '#ff6666' }}>OUT</b> / <b style={{ color: '#00ff88' }}>IN</b> to flip a player's eliminated status — needed for 2-player rounds (Music Auction, Song in 5 Parts, Win the Wall) after tie in Song Showdown, or to skip the opener entirely.
             </div>
           </div>
         )}
@@ -1165,8 +1170,10 @@ function PlayerScoreChip({ name, score, color, eliminated }: { name: string; sco
   );
 }
 
-function ScoreControl({ name, score, color, eliminated, onAdjust }: {
-  name: string; score: number; color: string; eliminated?: boolean; onAdjust: (delta: number) => void;
+function ScoreControl({ name, score, color, eliminated, onAdjust, onToggleEliminated }: {
+  name: string; score: number; color: string; eliminated?: boolean;
+  onAdjust: (delta: number) => void;
+  onToggleEliminated?: () => void;
 }) {
   return (
     <div style={{
@@ -1191,6 +1198,18 @@ function ScoreControl({ name, score, color, eliminated, onAdjust }: {
           </button>
         ))}
       </div>
+      {onToggleEliminated && (
+        <button onClick={onToggleEliminated} style={{
+          marginTop: '6px', width: '100%',
+          padding: '6px', fontSize: '0.65rem', fontWeight: 800, letterSpacing: '0.1em',
+          background: eliminated ? '#00ff8822' : '#ff444422',
+          color: eliminated ? '#00ff88' : '#ff6666',
+          border: `1px solid ${eliminated ? '#00ff8866' : '#ff444466'}`,
+          borderRadius: '4px', cursor: 'pointer',
+        }}>
+          {eliminated ? '↺ BRING IN' : '✕ ELIMINATE'}
+        </button>
+      )}
     </div>
   );
 }
