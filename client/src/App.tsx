@@ -33,6 +33,10 @@ function App() {
     return <ErrorBoundary><PlayerScreen playerId={2} /></ErrorBoundary>;
   }
 
+  if (path.startsWith('/player/3')) {
+    return <ErrorBoundary><PlayerScreen playerId={3} /></ErrorBoundary>;
+  }
+
   if (path.startsWith('/player')) {
     return <ErrorBoundary><PlayerScreen playerId={1} /></ErrorBoundary>;
   }
@@ -78,6 +82,14 @@ function App() {
       icon: '🟣',
       color: '#ff00aa',
       accent: '#cc0088',
+    },
+    {
+      href: '/player/3',
+      label: 'PLAYER 3',
+      desc: 'Buzz controller for Player 3. Third contestant in Song Showdown — eliminated after round 1, then just watches.',
+      icon: '🟠',
+      color: '#ff8c00',
+      accent: '#cc6600',
     },
     {
       href: '/setup',
@@ -229,7 +241,7 @@ function App() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '0.8rem', color: '#a0a0b0', lineHeight: 1.6 }}>
           <div><span style={{ color: '#ffd700', fontWeight: 700 }}>1.</span> Open <b style={{ color: '#ffd700' }}>Wall Display</b> on the big screen or share it via Zoom</div>
           <div><span style={{ color: '#ffd700', fontWeight: 700 }}>2.</span> Open <b style={{ color: '#00ff88' }}>Host Controls</b> on your laptop to run the game</div>
-          <div><span style={{ color: '#ffd700', fontWeight: 700 }}>3.</span> Send <b style={{ color: '#00d4ff' }}>Player 1</b> and <b style={{ color: '#ff00aa' }}>Player 2</b> links to contestants (phones work great)</div>
+          <div><span style={{ color: '#ffd700', fontWeight: 700 }}>3.</span> Send <b style={{ color: '#00d4ff' }}>Player 1</b>, <b style={{ color: '#ff00aa' }}>Player 2</b> and <b style={{ color: '#ff8c00' }}>Player 3</b> links to contestants (phones work great)</div>
           <div><span style={{ color: '#ffd700', fontWeight: 700 }}>4.</span> Click the <b style={{ color: '#ffd700' }}>Wall Display</b> once to enable audio, then start a round from Host</div>
         </div>
         <div style={{

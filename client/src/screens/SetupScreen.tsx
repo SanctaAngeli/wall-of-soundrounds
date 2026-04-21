@@ -26,6 +26,8 @@ const ROUND_LABELS: Record<RoundType, string> = {
   'another-level': 'Another Level',
   'music-auction': 'Music Auction',
   'song-in-5-parts': 'Song in 5 Parts',
+  'song-showdown': 'Song Showdown',
+  'win-the-wall': 'Win the Wall',
 };
 
 export function SetupScreen() {
@@ -43,10 +45,11 @@ export function SetupScreen() {
   const [dragOverRound, setDragOverRound] = useState<RoundType | null>(null);
   const [dragOverSlot, setDragOverSlot] = useState<number | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(() => {
-    try { return localStorage.getItem('wos_onboarding_seen') !== '1'; } catch { return true; }
+    // v2 key — reshown after the Song Showdown / Win the Wall addition so hosts see updated copy
+    try { return localStorage.getItem('wos_onboarding_seen_v2') !== '1'; } catch { return true; }
   });
   const dismissOnboarding = () => {
-    try { localStorage.setItem('wos_onboarding_seen', '1'); } catch {}
+    try { localStorage.setItem('wos_onboarding_seen_v2', '1'); } catch {}
     setShowOnboarding(false);
   };
 
@@ -273,8 +276,21 @@ export function SetupScreen() {
                 <div style={S.onboardStepTitle}>Put songs into rounds (drag + drop)</div>
                 <div style={S.onboardStepBody}>
                   Grab a song from the library and drag it over to the <strong>Round Lineups</strong> panel on the right.
-                  A dashed outline will appear — drop it inside to add it. Pick the round tab at the top (5 to 1 /
-                  Music Auction / Song in 5 Parts) first.
+                  A dashed outline will appear — drop it inside to add it. Pick the round tab at the top first —
+                  there are six rounds now including <strong>Song Showdown</strong> (opener, 3 players, 6 songs across different
+                  years) and <strong>Win the Wall</strong> (endgame, one survivor, $1m jackpot).
+                </div>
+              </div>
+            </div>
+
+            <div style={S.onboardStep}>
+              <div style={S.onboardBadge}>2b</div>
+              <div>
+                <div style={S.onboardStepTitle}>Song Showdown needs years</div>
+                <div style={S.onboardStepBody}>
+                  Each row on the Song Showdown wall shows a year. Every song has a baked-in year, but you can override
+                  it in the <strong>Sampler</strong> (next to the song title) — useful if you want "1984" to read as a
+                  cleaner round number or if our tag is wrong.
                 </div>
               </div>
             </div>
@@ -414,7 +430,16 @@ export function SetupScreen() {
                     </span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.62rem', color: '#606080' }}>
-                    <span>{song.year}</span>
+                    {(() => {
+                      const yearOverride = config.songYearOverrides?.[song.id];
+                      const effective = yearOverride ?? song.year;
+                      return (
+                        <span style={yearOverride != null ? { color: '#ffd700', fontWeight: 700 } : undefined}
+                              title={yearOverride != null ? `Override (default: ${song.year})` : undefined}>
+                          {effective}{yearOverride != null ? '*' : ''}
+                        </span>
+                      );
+                    })()}
                     <span>·</span>
                     <span>{song.genre ?? '—'}</span>
                     <span>·</span>
@@ -437,10 +462,59 @@ export function SetupScreen() {
           ) : (
             <>
               <div style={S.selectedHeader}>
-                <div>
+                <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: '1.3rem', fontWeight: 900, color: '#fff' }}>{selected.title}</div>
-                  <div style={{ color: '#a0a0b0', fontSize: '0.9rem' }}>{selected.artist} · {selected.year} · {selected.genre ?? '—'} · {selected.difficulty}</div>
+                  <div style={{ color: '#a0a0b0', fontSize: '0.9rem' }}>
+                    {selected.artist} · {selected.year} · {selected.genre ?? '—'} · {selected.difficulty}
+                  </div>
                 </div>
+                {/* Per-song year override — drives Song Showdown row labels. */}
+                {(() => {
+                  const override = config.songYearOverrides?.[selected.id];
+                  const effective = override ?? selected.year;
+                  return (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }} title="Override the year shown for this song (Song Showdown etc.)">
+                      <span style={{ fontSize: '0.65rem', color: '#8080a0', fontWeight: 700, letterSpacing: '0.1em' }}>YEAR</span>
+                      <input
+                        type="number"
+                        min={1900}
+                        max={2099}
+                        defaultValue={effective}
+                        key={`year-${selected.id}-${override ?? 'default'}`}
+                        onBlur={e => {
+                          const raw = e.target.value.trim();
+                          const parsed = raw ? parseInt(raw, 10) : NaN;
+                          if (!raw || Number.isNaN(parsed) || parsed === selected.year) {
+                            // Empty or back-to-default: clear override
+                            emit('host:config-set-song-year', { songId: selected.id, year: null });
+                          } else {
+                            emit('host:config-set-song-year', { songId: selected.id, year: parsed });
+                          }
+                        }}
+                        style={{
+                          width: '72px', padding: '4px 6px',
+                          background: override != null ? '#ffd70015' : '#1a1a3a',
+                          border: `1px solid ${override != null ? '#ffd70066' : '#333'}`,
+                          borderRadius: '4px', color: '#fff', fontSize: '0.85rem',
+                          textAlign: 'center', fontFamily: 'monospace',
+                        }}
+                      />
+                      {override != null && (
+                        <button
+                          onClick={() => emit('host:config-set-song-year', { songId: selected.id, year: null })}
+                          title={`Reset to default (${selected.year})`}
+                          style={{
+                            padding: '2px 6px', fontSize: '0.6rem', fontWeight: 700,
+                            background: 'transparent', color: '#ff8c00', border: '1px solid #ff8c0066',
+                            borderRadius: '4px', cursor: 'pointer',
+                          }}
+                        >
+                          RESET
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
 
               <div style={S.transport}>
@@ -616,11 +690,17 @@ export function SetupScreen() {
                   Quick add to round
                 </div>
                 <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                  <button onClick={() => addToRound('song-showdown', selected.id)} style={{ ...S.btn, background: '#ff8c00', color: '#000', fontSize: '0.7rem', padding: '6px 10px' }}>
+                    + Song Showdown
+                  </button>
                   <button onClick={() => addToRound('5to1', selected.id)} style={{ ...S.btn, background: '#8b5cf6', color: '#fff', fontSize: '0.7rem', padding: '6px 10px' }}>
                     + 5 to 1
                   </button>
                   <button onClick={() => addToRound('music-auction', selected.id)} style={{ ...S.btn, background: '#8b5cf6', color: '#fff', fontSize: '0.7rem', padding: '6px 10px' }}>
                     + Music Auction
+                  </button>
+                  <button onClick={() => addToRound('win-the-wall', selected.id)} style={{ ...S.btn, background: '#ffd700', color: '#000', fontSize: '0.7rem', padding: '6px 10px' }}>
+                    + Win the Wall
                   </button>
                   <span style={{ fontSize: '0.65rem', color: '#606080', alignSelf: 'center' }}>
                     (R2 & R4 use the per-group / per-column pickers on the right →)
@@ -656,8 +736,8 @@ export function SetupScreen() {
           {/* Scrollable content area so R4's 5 columns editor fits without clipping */}
           <div style={S.colScroll}>
 
-          {/* Simple ordered lineup editors (R1, R3) — drop-zone for songs dragged from the library */}
-          {(activeRoundTab === '5to1' || activeRoundTab === 'music-auction') && (() => {
+          {/* Simple ordered lineup editors (R1, R3, Song Showdown, Win the Wall) — drop-zone for songs */}
+          {(activeRoundTab === '5to1' || activeRoundTab === 'music-auction' || activeRoundTab === 'song-showdown' || activeRoundTab === 'win-the-wall') && (() => {
             const round = activeRoundTab;
             const ids = resolveLineup(round);
             const hasOverride = !!config.roundLineups[round];
@@ -686,6 +766,10 @@ export function SetupScreen() {
                   <div style={{ fontSize: '0.72rem', color: '#a0a0b0', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
                     {round === '5to1'
                       ? `${ids.length} songs — first 5 play (song 1 = 5 stems, song 5 = 1 stem)`
+                      : round === 'song-showdown'
+                      ? `${ids.length} songs (need ≥ 6: 3 visible + 3 replacements)${ids.length < 6 ? ' ⚠ not enough' : ''}`
+                      : round === 'win-the-wall'
+                      ? `${ids.length} songs (need ≥ 6; extras are alternates)${ids.length < 6 ? ' ⚠ not enough' : ''}`
                       : `${ids.length} songs in pool`}
                   </div>
                   {hasOverride && (

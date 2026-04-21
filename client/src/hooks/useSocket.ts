@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
-import type { ScreenRole, WallState, PlayerState, HostState, AudioCommand } from '@shared/types';
+import type { ScreenRole, WallState, PlayerState, HostState, AudioCommand, PlayerId } from '@shared/types';
 
 interface UseSocketOptions {
   role: ScreenRole;
-  playerId?: 1 | 2;
+  playerId?: PlayerId;
   onAudioCommand?: (cmd: AudioCommand) => void;
 }
 

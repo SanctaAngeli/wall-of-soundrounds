@@ -22,9 +22,17 @@ export function HostScreen() {
     auctionOffers, auctionCurrentOffer,
     auctionBids, auctionWinner, auctionBothSubmitted, auctionTimer, genre,
     songParts, currentPartIndex, anotherLevelConfig,
-    partsTargetRow, partsTargetSongTitle, partsSongs } = hostState;
+    partsTargetRow, partsTargetSongTitle, partsSongs,
+    // Song Showdown
+    showdownYearsVisible, showdownController, showdownSongsPlayed,
+    showdownTier, showdownLadder, showdownLockedPlayers,
+    showdownCurrentSongId, showdownSelectedRow,
+    // Win the Wall
+    wtwMusicianIndex, wtwSongsWon, wtwMusiciansThisSong, wtwSurvivor,
+    wtwCurrentSongId, wtwJackpotIfWon, wtwLineupSize } = hostState;
 
   const isGameActive = phase !== 'lobby' && phase !== 'round-complete' && phase !== 'game-over';
+  const PLAYER_COLORS: Record<1 | 2 | 3, string> = { 1: '#00d4ff', 2: '#ff00aa', 3: '#ff8c00' };
 
   return (
     <div style={styles.container}>
@@ -39,8 +47,9 @@ export function HostScreen() {
           {roundType && <span style={styles.roundLabel}>{roundName}</span>}
         </div>
         <div style={styles.topRight}>
-          <PlayerScoreChip name={players[1].name} score={players[1].score} color="#00d4ff" />
-          <PlayerScoreChip name={players[2].name} score={players[2].score} color="#ff00aa" />
+          <PlayerScoreChip name={players[1].name} score={players[1].score} color="#00d4ff" eliminated={players[1].eliminated} />
+          <PlayerScoreChip name={players[2].name} score={players[2].score} color="#ff00aa" eliminated={players[2].eliminated} />
+          <PlayerScoreChip name={players[3].name} score={players[3].score} color="#ff8c00" eliminated={players[3].eliminated} />
         </div>
       </div>
 
@@ -75,6 +84,7 @@ export function HostScreen() {
                   <ConnectionRow label="Wall Display" connected={connections.wall > 0} path="/wall" />
                   <ConnectionRow label={`Player 1: ${players[1].name}`} connected={connections.player1} path="/player/1" color="#00d4ff" />
                   <ConnectionRow label={`Player 2: ${players[2].name}`} connected={connections.player2} path="/player/2" color="#ff00aa" />
+                  <ConnectionRow label={`Player 3: ${players[3].name}`} connected={connections.player3} path="/player/3" color="#ff8c00" />
                 </div>
                 <div style={{ marginTop: '8px', fontSize: '0.7rem', color: '#606080' }}>
                   Open these URLs on other devices (same network)
@@ -85,7 +95,7 @@ export function HostScreen() {
             <div style={styles.section}>
               <h2 style={styles.sectionTitle}>Select Round</h2>
               <div style={styles.roundGrid}>
-                {(['5to1', 'another-level', 'music-auction', 'song-in-5-parts'] as RoundType[]).map(r => (
+                {(['song-showdown', '5to1', 'another-level', 'music-auction', 'song-in-5-parts', 'win-the-wall'] as RoundType[]).map(r => (
                   <button key={r} onClick={() => emit('host:select-round', { round: r })} style={styles.roundCard}>
                     <div style={styles.roundCardTitle}>{ROUND_NAMES[r]}</div>
                     <div style={styles.roundCardDesc}>{roundDescs[r]}</div>
@@ -101,6 +111,258 @@ export function HostScreen() {
         {/* ============================================ */}
         {isGameActive && (
           <>
+            {/* ============================================ */}
+            {/* SONG SHOWDOWN controls                        */}
+            {/* ============================================ */}
+            {roundType === 'song-showdown' && showdownYearsVisible && (
+              <div style={styles.section}>
+                <h2 style={styles.sectionTitle}>
+                  Song Showdown — Song {(showdownSongsPlayed ?? 0) + 1}/6
+                  {(showdownSongsPlayed ?? 0) >= 3 && <span style={{ marginLeft: 8, color: '#ffd700', fontSize: '0.75rem', fontWeight: 700 }}>DOUBLE STAKES</span>}
+                </h2>
+
+                {/* Controller indicator */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, fontSize: '0.85rem' }}>
+                  <span style={{ color: '#8080a0' }}>Control:</span>
+                  {showdownController ? (
+                    <span style={{
+                      fontWeight: 800,
+                      color: PLAYER_COLORS[showdownController],
+                      background: `${PLAYER_COLORS[showdownController]}22`,
+                      border: `1px solid ${PLAYER_COLORS[showdownController]}`,
+                      padding: '3px 10px', borderRadius: 6,
+                    }}>
+                      {players[showdownController].name}
+                    </span>
+                  ) : <span style={{ color: '#666' }}>None</span>}
+                  <span style={{ marginLeft: 'auto', color: '#8080a0', fontSize: '0.75rem' }}>
+                    Ladder: {(showdownLadder ?? []).map(v => formatMoney(v)).join(' → ')}
+                  </span>
+                </div>
+
+                {/* Year pick (shown while waiting to pick) */}
+                {phase === 'showdown-year-pick' && (
+                  <div>
+                    <div style={{ fontSize: '0.75rem', color: '#a0a0b0', marginBottom: 6 }}>
+                      {showdownController && players[showdownController].name} picks a year:
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {showdownYearsVisible.map(yr => (
+                        <button
+                          key={`${yr.row}-${yr.songId}`}
+                          disabled={!yr.songId}
+                          onClick={() => yr.songId && emit('host:showdown-pick-year', { songId: yr.songId })}
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: 12,
+                            padding: '10px 14px', borderRadius: 8,
+                            background: yr.songId ? '#1a1a3a' : '#0a0a1a',
+                            border: `1px solid ${yr.songId ? '#ffd70055' : '#333'}`,
+                            color: '#fff', cursor: yr.songId ? 'pointer' : 'not-allowed',
+                            opacity: yr.songId ? 1 : 0.4, textAlign: 'left',
+                          }}>
+                          <span style={{ fontSize: '1.2rem', fontWeight: 900, color: '#ffd700', minWidth: 60 }}>
+                            {yr.year || '—'}
+                          </span>
+                          <span style={{ color: '#8080a0', fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.1em' }}>
+                            ROW {yr.row}
+                          </span>
+                          <span style={{ flex: 1, fontSize: '0.85rem' }}>
+                            {yr.title ? `${yr.title} — ${yr.artist}` : <em style={{ color: '#666' }}>(empty)</em>}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Mid-song display */}
+                {phase !== 'showdown-year-pick' && currentSong && (
+                  <div style={{ background: '#1a1a3a', padding: 12, borderRadius: 8, border: '1px solid #ffd70033' }}>
+                    <div style={{ fontSize: '0.7rem', color: '#8080a0', fontWeight: 700, letterSpacing: '0.1em' }}>NOW PLAYING</div>
+                    <div style={{ fontSize: '1.1rem', fontWeight: 800, margin: '4px 0' }}>
+                      {currentSong.title} — <span style={{ color: '#a0a0b0', fontWeight: 600 }}>{currentSong.artist}</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: '0.75rem', color: '#a0a0b0' }}>
+                        Tier {(showdownTier ?? 0) + 1}/5 · Musicians {activeStems.length}/5
+                      </span>
+                      <span style={{ fontWeight: 800, color: '#ffd700' }}>
+                        ON OFFER: {formatMoney(currentPrize)}
+                      </span>
+                      {showdownLockedPlayers && showdownLockedPlayers.length > 0 && (
+                        <span style={{ fontSize: '0.75rem', color: '#ff6666', fontWeight: 700 }}>
+                          LOCKED: {showdownLockedPlayers.map(p => players[p].name).join(', ')}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* After a result: "Next song" button */}
+                {phase === 'result' && (
+                  <button
+                    onClick={() => emit('host:showdown-next-song')}
+                    style={{ ...styles.controlBtn, background: '#00d4ff', color: '#000', marginTop: 10, width: '100%' }}>
+                    NEXT SONG →
+                  </button>
+                )}
+
+                {/* Controller picker override (if host needs to force) */}
+                <details style={{ marginTop: 10 }}>
+                  <summary style={{ fontSize: '0.7rem', color: '#666', cursor: 'pointer' }}>Override controller</summary>
+                  <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                    {([1, 2, 3] as const).map(pid => (
+                      <button key={pid}
+                        disabled={players[pid].eliminated}
+                        onClick={() => emit('host:showdown-set-controller', { playerId: pid })}
+                        style={{
+                          flex: 1, padding: '6px 8px', fontSize: '0.7rem', fontWeight: 700,
+                          background: showdownController === pid ? PLAYER_COLORS[pid] : '#1a1a3a',
+                          color: showdownController === pid ? '#000' : '#fff',
+                          border: `1px solid ${PLAYER_COLORS[pid]}55`, borderRadius: 4,
+                          opacity: players[pid].eliminated ? 0.35 : 1,
+                          cursor: players[pid].eliminated ? 'not-allowed' : 'pointer',
+                        }}>
+                        {players[pid].name}
+                      </button>
+                    ))}
+                  </div>
+                </details>
+              </div>
+            )}
+
+            {/* ============================================ */}
+            {/* WIN THE WALL controls                         */}
+            {/* ============================================ */}
+            {roundType === 'win-the-wall' && (
+              <div style={styles.section}>
+                <h2 style={styles.sectionTitle}>
+                  Win the Wall — {wtwSongsWon ?? 0}/6 songs · Musician {(wtwMusicianIndex ?? 0) + 1}/15
+                </h2>
+
+                {/* Survivor picker (pre-start) */}
+                {phase === 'round-intro' && (
+                  <>
+                    <div style={{ fontSize: '0.75rem', color: '#a0a0b0', marginBottom: 6 }}>Pick survivor:</div>
+                    <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+                      {([1, 2, 3] as const).map(pid => (
+                        <button key={pid}
+                          disabled={players[pid].eliminated}
+                          onClick={() => emit('host:wtw-set-survivor', { playerId: pid })}
+                          style={{
+                            flex: 1, padding: '10px 8px', fontSize: '0.85rem', fontWeight: 700,
+                            background: wtwSurvivor === pid ? PLAYER_COLORS[pid] : '#1a1a3a',
+                            color: wtwSurvivor === pid ? '#000' : '#fff',
+                            border: `1px solid ${PLAYER_COLORS[pid]}`, borderRadius: 6,
+                            opacity: players[pid].eliminated ? 0.35 : 1,
+                            cursor: players[pid].eliminated ? 'not-allowed' : 'pointer',
+                          }}>
+                          {players[pid].name}
+                          <div style={{ fontSize: '0.65rem', opacity: 0.7 }}>{formatMoney(players[pid].score)}</div>
+                        </button>
+                      ))}
+                    </div>
+                    <button
+                      onClick={() => emit('host:wtw-start-song')}
+                      disabled={!wtwSurvivor}
+                      style={{
+                        ...styles.controlBtn,
+                        background: wtwSurvivor ? '#ffd700' : '#333',
+                        color: wtwSurvivor ? '#000' : '#666',
+                        width: '100%',
+                      }}>
+                      START ENDGAME
+                    </button>
+                  </>
+                )}
+
+                {/* Prize pyramid — gates (3/5/6) trigger walkaway decisions; others are milestones */}
+                {phase !== 'round-intro' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, marginBottom: 12 }}>
+                    {[
+                      { songs: 6, prize: 1_000_000, gate: true,  label: 'JACKPOT' },
+                      { songs: 5, prize: 100_000,   gate: true,  label: 'GATE' },
+                      { songs: 4, prize: 75_000,    gate: false, label: '' },
+                      { songs: 3, prize: 50_000,    gate: true,  label: 'GATE' },
+                      { songs: 2, prize: 10_000,    gate: false, label: '' },
+                      { songs: 1, prize: 1_000,     gate: false, label: '' },
+                    ].map(tier => {
+                      const reached = (wtwSongsWon ?? 0) >= tier.songs;
+                      const isNext = (wtwSongsWon ?? 0) + 1 === tier.songs;
+                      return (
+                        <div key={tier.songs} style={{
+                          width: `${40 + tier.songs * 10}%`,
+                          padding: '4px 10px',
+                          background: reached ? '#ffd70033' : isNext ? '#ffd70011' : 'transparent',
+                          border: `1px solid ${reached ? '#ffd700' : isNext ? '#ffd70066' : tier.gate ? '#666' : '#333'}`,
+                          borderRadius: 4, textAlign: 'center',
+                          fontSize: '0.8rem', fontWeight: 700,
+                          color: reached ? '#ffd700' : tier.gate ? '#bbb' : '#888',
+                        }}>
+                          Song {tier.songs} · {formatMoney(tier.prize)}
+                          {tier.label && <span style={{ fontSize: '0.6rem', opacity: 0.7, marginLeft: 8 }}>{tier.label}</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Walkaway offer */}
+                {phase === 'wtw-walkaway-offer' && (
+                  <div style={{ background: '#1a1a3a', border: '2px solid #ffd700', borderRadius: 8, padding: 14, marginBottom: 10 }}>
+                    <div style={{ fontSize: '0.75rem', color: '#ffd700', fontWeight: 700, letterSpacing: '0.1em' }}>
+                      DECISION TIME
+                    </div>
+                    <div style={{ fontSize: '1rem', margin: '6px 0' }}>
+                      Walk with <b style={{ color: '#ffd700' }}>{formatMoney(currentPrize)}</b> or keep going?
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                      <button onClick={() => emit('host:wtw-walkaway-accept')}
+                        style={{ ...styles.controlBtn, flex: 1, background: '#00ff88', color: '#000' }}>
+                        ✓ WALK (+{formatMoney(currentPrize)})
+                      </button>
+                      <button onClick={() => emit('host:wtw-walkaway-decline')}
+                        style={{ ...styles.controlBtn, flex: 1, background: '#ff8c00', color: '#000' }}>
+                        KEEP GOING →
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Mid-song controls */}
+                {phase === 'wtw-playing' && (
+                  <div style={{ fontSize: '0.8rem', color: '#a0a0b0', marginBottom: 8 }}>
+                    Song {(wtwSongsWon ?? 0) + 1}: <b style={{ color: '#fff' }}>{currentSong?.title ?? '—'}</b>
+                    <span style={{ marginLeft: 10 }}>Musicians this song: {wtwMusiciansThisSong}/5</span>
+                    <span style={{ marginLeft: 10 }}>Next gate: {formatMoney(wtwJackpotIfWon ?? 0)}</span>
+                  </div>
+                )}
+                {phase === 'wtw-playing' && (
+                  <button onClick={() => emit('host:wtw-skip')}
+                    style={{ ...styles.controlBtn, background: '#ff4444', color: '#fff', width: '100%' }}>
+                    SKIP SONG (burn remaining musicians)
+                  </button>
+                )}
+
+                {/* Gold / bust end states */}
+                {phase === 'wtw-gold' && (
+                  <div style={{ textAlign: 'center', padding: 20, background: 'linear-gradient(135deg, #ffd70033, #ff8c0033)', borderRadius: 8, border: '2px solid #ffd700' }}>
+                    <div style={{ fontSize: '1.4rem', fontWeight: 900, color: '#ffd700' }}>JACKPOT!</div>
+                    <div style={{ fontSize: '1.1rem', marginTop: 6 }}>
+                      {wtwSurvivor && players[wtwSurvivor].name} wins {formatMoney(1_000_000)}
+                    </div>
+                  </div>
+                )}
+                {phase === 'wtw-bust' && (
+                  <div style={{ textAlign: 'center', padding: 16, background: '#2a0000', borderRadius: 8, border: '1px solid #ff4444' }}>
+                    <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#ff6666' }}>
+                      BUST — walked away with nothing
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Song Info Bar */}
             <div style={styles.section}>
               <div style={styles.songInfo}>
@@ -808,11 +1070,16 @@ export function HostScreen() {
         {phase !== 'lobby' && (
           <div style={styles.section}>
             <h2 style={styles.sectionTitle}>Scores</h2>
-            <div style={{ display: 'flex', gap: '16px' }}>
+            <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
               <ScoreControl name={players[1].name} score={players[1].score} color="#00d4ff"
+                eliminated={players[1].eliminated}
                 onAdjust={(d) => emit('host:adjust-score', { player: 1, delta: d })} />
               <ScoreControl name={players[2].name} score={players[2].score} color="#ff00aa"
+                eliminated={players[2].eliminated}
                 onAdjust={(d) => emit('host:adjust-score', { player: 2, delta: d })} />
+              <ScoreControl name={players[3].name} score={players[3].score} color="#ff8c00"
+                eliminated={players[3].eliminated}
+                onAdjust={(d) => emit('host:adjust-score', { player: 3, delta: d })} />
             </div>
           </div>
         )}
@@ -878,28 +1145,40 @@ function ConnectionDots({ connections }: { connections: any }) {
       {dot('Wall', connections.wall > 0)}
       {dot('P1', connections.player1)}
       {dot('P2', connections.player2)}
+      {dot('P3', connections.player3)}
     </div>
   );
 }
 
-function PlayerScoreChip({ name, score, color }: { name: string; score: number; color: string }) {
+function PlayerScoreChip({ name, score, color, eliminated }: { name: string; score: number; color: string; eliminated?: boolean }) {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: '8px',
-      background: '#1a1a3a', padding: '4px 12px', borderRadius: '16px', border: `1px solid ${color}`,
+      background: '#1a1a3a', padding: '4px 12px', borderRadius: '16px',
+      border: `1px solid ${eliminated ? '#444' : color}`,
+      opacity: eliminated ? 0.45 : 1,
     }}>
-      <span style={{ fontSize: '0.75rem', color }}>{name}</span>
+      <span style={{ fontSize: '0.75rem', color, textDecoration: eliminated ? 'line-through' : 'none' }}>{name}</span>
       <span style={{ fontWeight: 800, color: '#ffd700', fontSize: '0.85rem' }}>{formatMoney(score)}</span>
+      {eliminated && <span style={{ fontSize: '0.55rem', color: '#888', fontWeight: 700, letterSpacing: '0.1em' }}>OUT</span>}
     </div>
   );
 }
 
-function ScoreControl({ name, score, color, onAdjust }: {
-  name: string; score: number; color: string; onAdjust: (delta: number) => void;
+function ScoreControl({ name, score, color, eliminated, onAdjust }: {
+  name: string; score: number; color: string; eliminated?: boolean; onAdjust: (delta: number) => void;
 }) {
   return (
-    <div style={{ flex: 1, background: '#1a1a3a', border: `1px solid ${color}`, borderRadius: '8px', padding: '12px', textAlign: 'center' }}>
-      <div style={{ fontSize: '0.8rem', color, fontWeight: 700 }}>{name}</div>
+    <div style={{
+      flex: '1 1 140px', minWidth: '140px',
+      background: '#1a1a3a',
+      border: `1px solid ${eliminated ? '#555' : color}`,
+      borderRadius: '8px', padding: '12px', textAlign: 'center',
+      opacity: eliminated ? 0.55 : 1,
+    }}>
+      <div style={{ fontSize: '0.8rem', color, fontWeight: 700, textDecoration: eliminated ? 'line-through' : 'none' }}>
+        {name}{eliminated && <span style={{ marginLeft: 6, color: '#888', fontSize: '0.6rem' }}>· OUT</span>}
+      </div>
       <div style={{ fontSize: '1.2rem', fontWeight: 800, color: '#ffd700', margin: '4px 0' }}>{formatMoney(score)}</div>
       <div style={{ display: 'flex', gap: '4px' }}>
         {[-5000, -1000, 1000, 5000].map(d => (
@@ -921,6 +1200,8 @@ const roundDescs: Record<RoundType, string> = {
   'another-level': 'Prize board with 3 levels. Stems play immediately, buzz to guess.',
   'music-auction': 'Musicians make offers, players secretly bid. Fewest musicians wins!',
   'song-in-5-parts': '3 songs scattered across 15 cells. Find the target (announced first). Vocals revealed first, then guitar → drums.',
+  'song-showdown': 'Opener, 3 players. Each row = a year. Musicians join every 5s, cash drops as they join. First to buzz banks + picks next year. 6 songs, lowest eliminated.',
+  'win-the-wall': 'Solo endgame. Snake through 15 musicians, 6 songs for $1m. Walkaway gates at 3 ($50k) and 5 ($100k). Burn all 15 = walk with nothing.',
 };
 
 const styles: Record<string, React.CSSProperties> = {

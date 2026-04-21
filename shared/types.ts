@@ -25,7 +25,7 @@ export interface Song {
   wrongAnswers: string[];
 }
 
-export type RoundType = '5to1' | 'another-level' | 'music-auction' | 'song-in-5-parts';
+export type RoundType = '5to1' | 'another-level' | 'music-auction' | 'song-in-5-parts' | 'song-showdown' | 'win-the-wall';
 
 export type GamePhase =
   | 'lobby'
@@ -45,14 +45,29 @@ export type GamePhase =
   | 'auction-reveal'
   // Song in 5 Parts specific
   | 'parts-intro'
-  | 'parts-playing';
+  | 'parts-playing'
+  // Song Showdown specific: controller picks a year from the 3 visible rows
+  | 'showdown-year-pick'
+  // Win the Wall specific
+  | 'wtw-playing'                 // musician snake is ticking, buzz open
+  | 'wtw-walkaway-offer'          // at 3 or 5 songs: offer walkaway vs keep-going
+  | 'wtw-gold'                    // all 6 — wall turns gold, $1m won
+  | 'wtw-bust';                   // burned all 15 musicians without 3 — walks with nothing
 
 export type ScreenRole = 'wall' | 'player' | 'host';
+
+// Player IDs. Rounds played with all 3 (Song Showdown) broaden to 1|2|3;
+// rounds played after the first elimination (R3 Music Auction, R4 Song in 5 Parts,
+// Win the Wall) still type-annotate 1|2 where that's all they handle.
+export type PlayerId = 1 | 2 | 3;
 
 export interface PlayerInfo {
   name: string;
   score: number;
   connected: boolean;
+  // True once the player has been eliminated (bottom of Song Showdown, or Win the Wall runner-up).
+  // Eliminated players can't buzz/bid; R3/R4 ignore their input.
+  eliminated?: boolean;
 }
 
 export interface WallMusician {
@@ -80,8 +95,8 @@ export interface WallState {
   totalSongs: number;
   musicians: WallMusician[];
   currentPrize: number;
-  players: { 1: PlayerInfo; 2: PlayerInfo };
-  buzzedPlayer: 1 | 2 | null;
+  players: { 1: PlayerInfo; 2: PlayerInfo; 3: PlayerInfo };
+  buzzedPlayer: PlayerId | null;
   visualEffect: 'none' | 'correct' | 'wrong' | 'reveal' | 'gold' | 'buzz';
   songTitle?: string;
   // Host pressed "Reveal Song" — wall shows the full title + artist as an overlay
@@ -107,10 +122,24 @@ export interface WallState {
   partsColumnForfeits?: boolean[];
   partsLockedPlayers?: (1 | 2)[];
   partsRevealing?: boolean;
+  // Song Showdown — 3 rows, one year label per row. selected row = currently playing.
+  showdownRows?: { row: number; year: number; songId: string; selected: boolean; done: boolean }[];
+  showdownController?: PlayerId | null;     // whose turn to pick a year
+  showdownTier?: number;                     // 0-4 into current ladder (fewer stems = earlier tier = more cash)
+  showdownLadder?: number[];                 // 5-entry ladder, already doubled if songsPlayed >= 3
+  showdownSongsPlayed?: number;              // 0-6
+  showdownLockedPlayers?: PlayerId[];        // wrong-buzz lockout for current showdown song only
+  // Win the Wall
+  wtwMusicianIndex?: number;                 // 0-14 (snake position, current musician playing)
+  wtwSpentMusicians?: number[];              // indices already used, rendered faded
+  wtwSongsWon?: number;                      // 0-6
+  wtwMusiciansThisSong?: number;             // 0-5 — 5 forces skip
+  wtwSurvivor?: PlayerId | null;             // who's playing
+  wtwCurrentOffer?: number | null;           // walkaway tier displayed at a gate (50k / 100k / 1m)
 }
 
 export interface PlayerState {
-  playerId: 1 | 2;
+  playerId: PlayerId;
   name: string;
   score: number;
   canBuzz: boolean;
@@ -164,9 +193,9 @@ export interface HostState {
   totalStems: number;
   isAudioPlaying: boolean;
   currentPrize: number;
-  buzzedPlayer: 1 | 2 | null;
-  players: { 1: PlayerInfo; 2: PlayerInfo };
-  connections: { wall: number; player1: boolean; player2: boolean; host: number };
+  buzzedPlayer: PlayerId | null;
+  players: { 1: PlayerInfo; 2: PlayerInfo; 3: PlayerInfo };
+  connections: { wall: number; player1: boolean; player2: boolean; player3: boolean; host: number };
   songList: { id: string; title: string; artist: string }[];
   // Round-specific
   auctionOffers: AuctionOffer[];
@@ -201,6 +230,24 @@ export interface HostState {
   partsScatter?: { row: number; col: number; songIndex: 0 | 1 | 2 }[];
   // Per-column target + decoys (host-only info; shown in column picker)
   partsColumnSongs?: { col: number; targetTitle: string; targetArtist: string; decoyTitles: [string, string] }[];
+  // Song Showdown host-side info
+  showdownYearsVisible?: { songId: string; title: string; artist: string; year: number; row: number }[];
+  showdownYearsReserveCount?: number;
+  showdownController?: PlayerId | null;
+  showdownSongsPlayed?: number;
+  showdownTier?: number;
+  showdownLadder?: number[];
+  showdownLockedPlayers?: PlayerId[];
+  showdownCurrentSongId?: string | null;
+  showdownSelectedRow?: number | null;
+  // Win the Wall host-side info
+  wtwMusicianIndex?: number;
+  wtwSongsWon?: number;
+  wtwMusiciansThisSong?: number;
+  wtwSurvivor?: PlayerId | null;
+  wtwCurrentSongId?: string | null;
+  wtwJackpotIfWon?: number;
+  wtwLineupSize?: number;
   // Current editable config — shown in /setup and used to drive round lineups at selection time
   config?: GameConfig;
 }
@@ -228,9 +275,9 @@ export type AudioCommand =
 
 // Client -> Server
 export interface ClientEvents {
-  'register': { role: ScreenRole; playerId?: 1 | 2 };
-  'player:buzz': { playerId: 1 | 2; timestamp: number };
-  'player:set-name': { playerId: 1 | 2; name: string };
+  'register': { role: ScreenRole; playerId?: PlayerId };
+  'player:buzz': { playerId: PlayerId; timestamp: number };
+  'player:set-name': { playerId: PlayerId; name: string };
   'host:select-round': { round: RoundType };
   'host:load-song': { songIndex: number };
   'host:play': {};
@@ -243,7 +290,7 @@ export interface ClientEvents {
   'host:mark-wrong': {};
   'host:give-to-other': {};
   'host:next-song': {};
-  'host:adjust-score': { player: 1 | 2; delta: number };
+  'host:adjust-score': { player: PlayerId; delta: number };
   'host:end-round': {};
   'host:reset': {};
   'host:set-stem': { stemId: number; active: boolean };
@@ -255,6 +302,8 @@ export interface ClientEvents {
   'host:config-set-parts-column': { col: number; targetSongId: string; decoy1SongId: string; decoy2SongId: string };
   'host:config-set-stem-order': { songId: string; stemIds: number[] };
   'host:config-set-auction-override': { songId: string; title?: string; genre?: string };
+  // Per-song year override. Pass null to clear and fall back to the song's default year.
+  'host:config-set-song-year': { songId: string; year: number | null };
   'host:config-reset': {};
   'host:config-import': { json: string };
   // Another Level
@@ -274,6 +323,21 @@ export interface ClientEvents {
   'host:parts-next-stem': {};
   'host:parts-next-column': {};
   'host:parts-reveal': {};
+  // Song Showdown
+  'host:showdown-pick-year': { songId: string };
+  'host:showdown-next-song': {};              // after a resolution — replaces year, hands to controller
+  'host:showdown-eliminate-lowest': {};       // after 6 songs: mark lowest-score player eliminated
+  'host:showdown-set-controller': { playerId: PlayerId };  // manual override (e.g. to rerun random pick)
+  // Win the Wall
+  'host:wtw-set-survivor': { playerId: PlayerId };  // host marks who's playing the endgame
+  'host:wtw-start-song': {};                         // begin the snake ticker for next song
+  'host:wtw-correct': {};                            // buzz was right → full wall mix celebration, song counts
+  'host:wtw-skip': {};                               // force-skip the current song (all 5 musicians spent)
+  'host:wtw-walkaway-accept': {};                    // survivor banked the offered jackpot
+  'host:wtw-walkaway-decline': {};                   // survivor continues for more
+  'host:wtw-reset': {};                              // reset round state, keep lineup
+  'host:config-set-showdown-lineup': { songIds: string[] };
+  'host:config-set-wtw-lineup': { songIds: string[] };
 }
 
 // Server -> Client
@@ -326,6 +390,8 @@ export const ROUND_NAMES: Record<RoundType, string> = {
   'another-level': 'ANOTHER LEVEL',
   'music-auction': 'MUSIC AUCTION',
   'song-in-5-parts': 'SONG IN 5 PARTS',
+  'song-showdown': 'SONG SHOWDOWN',
+  'win-the-wall': 'WIN THE WALL',
 };
 
 export function formatMoney(amount: number): string {
@@ -351,4 +417,13 @@ export interface GameConfig {
   // R3 "Music Auction" on-wall title/genre overrides per song (lets the host curate what the
   // audience sees, e.g. rename "HUMBLE." to "RAP HIT" and genre "Hip-Hop" to "2010s")
   musicAuctionOverrides?: Record<string, { title?: string; genre?: string }>;
+  // Per-song year override. Drives Song Showdown row labels and any future
+  // year-based filtering. Omitted entry ⇒ use the song's default year from songs.ts.
+  songYearOverrides?: Record<string, number>;
+  // Song Showdown: ordered pool of songs (at least 6 required — 3 visible + 3 replacements).
+  // Each song's effective year (via songYearOverrides or baked year) is what's shown on the wall.
+  songShowdownLineup?: string[];
+  // Win the Wall: ordered song pool for the endgame. Up to 8 songs — round needs 6 to clear,
+  // alternates stand by in case of producer curveballs between takes.
+  winTheWallLineup?: string[];
 }
