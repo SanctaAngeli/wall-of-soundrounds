@@ -16,8 +16,26 @@ export function useAudioEngine() {
   const animationFrameRef = useRef(0);
   const isLoadedRef = useRef(false);
   const pendingCommandsRef = useRef<AudioCommand[]>([]);
+  // Monotonic counter — bumped on every load call. Any in-flight load whose captured seq
+  // doesn't match the current one is stale (user clicked a new song) and must abandon its
+  // decoded buffers rather than registering them into stemsRef. Without this, rapid clicks
+  // through the /setup sampler stack 20 songs' worth of stems on top of each other.
+  const loadSeqRef = useRef(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
+
+  // Hard-stop + fully teardown every currently-registered stem. Stops the source, disconnects
+  // the gain node from the destination, and clears the map. Safe to call repeatedly.
+  const teardownAllStems = useCallback(() => {
+    stemsRef.current.forEach((stem) => {
+      if (stem.source) {
+        try { stem.source.stop(); } catch {}
+        try { stem.source.disconnect(); } catch {}
+      }
+      try { stem.gainNode.disconnect(); } catch {}
+    });
+    stemsRef.current.clear();
+  }, []);
 
   const initAudioContext = useCallback(() => {
     if (!audioContextRef.current) {
@@ -31,14 +49,15 @@ export function useAudioEngine() {
 
   const loadSong = useCallback(async (songId: string, stems: Stem[]) => {
     const ctx = initAudioContext();
-    // Stop and clean up any existing playback
-    stemsRef.current.forEach((stem) => {
-      if (stem.source) {
-        try { stem.source.stop(); } catch {}
-      }
-    });
+    // Bump the load sequence BEFORE doing anything else. Any prior in-flight load now knows
+    // it's stale when it compares its captured seq to loadSeqRef.current.
+    const mySeq = ++loadSeqRef.current;
+
+    // Hard-stop + fully disconnect whatever's currently playing/registered. Crucial: we do this
+    // synchronously so even a not-yet-started (still-decoding) previous load gets neutralised by
+    // the seq check below, while any already-playing audio is killed here.
+    teardownAllStems();
     cancelAnimationFrame(animationFrameRef.current);
-    stemsRef.current.clear();
     isLoadedRef.current = false;
     pendingCommandsRef.current = [];
     setIsLoaded(false);
@@ -49,9 +68,14 @@ export function useAudioEngine() {
       const loadPromises = stems.map(async (stem) => {
         const url = `/audio/songs/${songId}/${stem.file}`;
         const response = await fetch(url);
+        // Stale-load check: if the user clicked another song while this fetch was in flight,
+        // throw away the response and don't write anything into stemsRef.
+        if (mySeq !== loadSeqRef.current) return;
         if (!response.ok) throw new Error(`Failed to load ${url}: ${response.status}`);
         const arrayBuffer = await response.arrayBuffer();
+        if (mySeq !== loadSeqRef.current) return;
         const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+        if (mySeq !== loadSeqRef.current) return;
 
         const gainNode = ctx.createGain();
         gainNode.connect(ctx.destination);
@@ -66,6 +90,12 @@ export function useAudioEngine() {
       });
 
       await Promise.all(loadPromises);
+      // Final stale check — if we've been superseded, bail before announcing "loaded" and
+      // replaying queued commands (which would belong to the newer load anyway).
+      if (mySeq !== loadSeqRef.current) {
+        console.log(`[AudioEngine] Discarded stale load for ${songId} (superseded)`);
+        return;
+      }
       isLoadedRef.current = true;
       setIsLoaded(true);
       console.log(`[AudioEngine] Song loaded: ${songId} (${stems.length} stems)`);
@@ -82,20 +112,16 @@ export function useAudioEngine() {
     } catch (error) {
       console.error('[AudioEngine] Error loading song:', error);
     }
-  }, [initAudioContext]);
+  }, [initAudioContext, teardownAllStems]);
 
   // Load multiple songs at once (for Song in 5 Parts - 3 songs, one per row)
   // Each song's stems already have namespaced IDs (row * 100 + stemId)
   const loadMultiSongs = useCallback(async (songs: { songId: string; stems: Stem[]; row: number }[]) => {
     const ctx = initAudioContext();
-    // Stop and clean up any existing playback
-    stemsRef.current.forEach((stem) => {
-      if (stem.source) {
-        try { stem.source.stop(); } catch {}
-      }
-    });
+    const mySeq = ++loadSeqRef.current;
+
+    teardownAllStems();
     cancelAnimationFrame(animationFrameRef.current);
-    stemsRef.current.clear();
     isLoadedRef.current = false;
     pendingCommandsRef.current = [];
     setIsLoaded(false);
@@ -111,9 +137,12 @@ export function useAudioEngine() {
             // Use the original file name from the song's directory
             const url = `/audio/songs/${songEntry.songId}/${stem.file}`;
             const response = await fetch(url);
+            if (mySeq !== loadSeqRef.current) return;
             if (!response.ok) throw new Error(`Failed to load ${url}: ${response.status}`);
             const arrayBuffer = await response.arrayBuffer();
+            if (mySeq !== loadSeqRef.current) return;
             const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+            if (mySeq !== loadSeqRef.current) return;
 
             const gainNode = ctx.createGain();
             gainNode.connect(ctx.destination);
@@ -130,6 +159,10 @@ export function useAudioEngine() {
       }
 
       await Promise.all(allLoadPromises);
+      if (mySeq !== loadSeqRef.current) {
+        console.log(`[AudioEngine] Discarded stale multi-load (superseded)`);
+        return;
+      }
       isLoadedRef.current = true;
       setIsLoaded(true);
       const totalStems = songs.reduce((sum, s) => sum + s.stems.length, 0);
@@ -147,7 +180,7 @@ export function useAudioEngine() {
     } catch (error) {
       console.error('[AudioEngine] Error loading multi-song:', error);
     }
-  }, [initAudioContext]);
+  }, [initAudioContext, teardownAllStems]);
 
   const createAndStartSources = useCallback((offset: number = 0) => {
     const ctx = audioContextRef.current;
@@ -365,10 +398,14 @@ export function useAudioEngine() {
       document.removeEventListener('touchstart', resumeOnGesture, { capture: true });
       document.removeEventListener('keydown', resumeOnGesture, { capture: true });
       cancelAnimationFrame(animationFrameRef.current);
+      // Bump seq so any in-flight load abandons its writes, then teardown everything.
+      loadSeqRef.current += 1;
       stemsRef.current.forEach((stem) => {
         if (stem.source) {
           try { stem.source.stop(); } catch {}
+          try { stem.source.disconnect(); } catch {}
         }
+        try { stem.gainNode.disconnect(); } catch {}
       });
       stemsRef.current.clear();
       if (audioContextRef.current) {
