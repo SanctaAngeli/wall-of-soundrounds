@@ -415,8 +415,9 @@ function generateShowdownWallMusicians(state: GameState): WallMusician[] {
   const musicians: WallMusician[] = [];
   let id = 1;
   const selectedRow = state.showdownSelectedRow;        // 1-3 or 0 if no row picked yet
-  const primaryStems = state.currentSong?.stems ?? [];
-  // Map slot → stem ID via the resolved join order (so col 0 = slot 1 = first stem to join).
+  // Union of primary + extras — the host may have arranged an LV or Horns into a slot and the
+  // wall cell needs to render that stem's icon/instrument, not fall back to "nothing shown".
+  const allStems = state.currentSong ? [...state.currentSong.stems, ...(state.currentSong.extraStems ?? [])] : [];
   const joinOrder = state.showdownStemJoinOrder;
 
   for (let row = 0; row < 3; row++) {
@@ -426,12 +427,12 @@ function generateShowdownWallMusicians(state: GameState): WallMusician[] {
     // For the selected row, map each col to the join-order stem. For unselected rows, show the
     // row song's default stems as dim silhouettes (just for visual density).
     for (let col = 0; col < 5; col++) {
-      let stem = undefined as (typeof primaryStems)[number] | undefined;
+      let stem = undefined as (typeof allStems)[number] | undefined;
       let isActive = false;
       if (rowIsPlaying) {
         // Light cells L→R as stems join. Col 0 = slot 1 (first to join, highest cash).
         const stemId = joinOrder[col];
-        stem = stemId != null ? primaryStems.find(s => s.id === stemId) : undefined;
+        stem = stemId != null ? allStems.find(s => s.id === stemId) : undefined;
         isActive = stem ? state.activeStems.includes(stem.id) : false;
       } else if (rowSong) {
         // Unselected row: show the row's own stems dim. These never light up.
@@ -443,7 +444,9 @@ function generateShowdownWallMusicians(state: GameState): WallMusician[] {
         col: col + 1,
         instrument: stem?.instrument ?? '',
         icon: stem?.icon ?? '',
-        color: ROW_COLORS[row][col],
+        // Prefer the stem's own colour when available (so extras show their bespoke
+        // colour — e.g. Gav LV pink, Rose LV peach). Fall back to the row colour default.
+        color: (rowIsPlaying && stem?.color) ? stem.color : ROW_COLORS[row][col],
         isActive,
         isPlaying: isActive && state.isAudioPlaying,
       });
@@ -1151,16 +1154,18 @@ export function loadSong(state: GameState, index: number): void {
   // Round-specific song setup
   switch (state.roundType) {
     case '5to1': {
-      state.currentPrize = roundPrizes['5to1'][index] || 1000;
-      // "5 to 1" progression: song 1 plays 5 stems simultaneously, song 5 plays just 1.
-      // Fewer instruments = harder to recognise = higher prize.
+      // "Less is More" progression: song 1 plays 5 stems simultaneously ($3k), song 5
+      // plays just 1 ($10k). Fewer instruments = harder to recognise = more money.
+      state.currentPrize = roundPrizes['5to1'][index] || 3000;
       const instrumentCount = Math.max(1, 5 - index);
       if (state.currentSong) {
-        // Honour host's per-song stem-order arrangement (set via drag-drop on /setup).
-        // Falls back to the song's default stem order.
+        // Honour host's per-song stem-order arrangement. Look up stems across primary AND
+        // extras so the host can arrange e.g. LV_GAV or HORNS into a slot. Falls back to
+        // the song's default 5 primary stems if no arrangement is set.
+        const allStems = [...state.currentSong.stems, ...(state.currentSong.extraStems ?? [])];
         const override = state.config.stemOrderBySong?.[state.currentSong.id];
         const orderedStems = override && override.length > 0
-          ? override.map(id => state.currentSong!.stems.find(s => s.id === id)).filter((s): s is NonNullable<typeof s> => !!s)
+          ? override.map(id => allStems.find(s => s.id === id)).filter((s): s is NonNullable<typeof s> => !!s)
           : state.currentSong.stems;
         state.activeStems = orderedStems.slice(0, instrumentCount).map(s => s.id);
       }
@@ -2080,17 +2085,24 @@ export function showdownClearTimer(state: GameState): void {
   }
 }
 
-// Build the stem join order for a showdown song — honours stemOrderBySong override, falls back
-// to the song's default primary-stems order. Filters to primary stems only (D/B/K/G/V).
+// Build the stem join order for a showdown song — honours stemOrderBySong override and
+// accepts ANY stem the song has (primary D/B/K/G/V or extras: horns, BVs, 4 named LVs, clue).
+// This matters for producer-curated arrangements — e.g. for "The Joker" the host wants slot 1
+// to be Gav's lead vocal line (LV_GAV) specifically, not the mixed VOCAL.mp3 (which blends
+// BVs + 4 LVs together and can end up sounding wrong for songs the BVs weren't recorded for).
 function resolveShowdownStemOrder(state: GameState, song: Song): number[] {
+  const allStems = [...song.stems, ...(song.extraStems ?? [])];
   const override = state.config.stemOrderBySong?.[song.id];
   if (override && override.length > 0) {
+    // Accept any stem ID the song knows about — primary OR extra.
     const valid = override
-      .map(id => song.stems.find(s => s.id === id))
+      .map(id => allStems.find(s => s.id === id))
       .filter((s): s is NonNullable<typeof s> => !!s)
       .map(s => s.id);
     if (valid.length >= 5) return valid.slice(0, 5);
-    // Pad with remaining primary stems the override skipped
+    // Host filled fewer than 5 slots — pad with remaining primary stems (they at least exist
+    // and we know they're in the song). Clue (id 9) stays excluded from padding since it's a
+    // lyric hint, not a musician.
     const remaining = song.stems.filter(s => !valid.includes(s.id)).map(s => s.id);
     return [...valid, ...remaining].slice(0, 5);
   }

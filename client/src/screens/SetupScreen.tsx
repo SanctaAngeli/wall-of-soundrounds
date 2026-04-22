@@ -22,7 +22,7 @@ interface LibraryResponse {
 
 const COL_NAMES = ['Vocals', 'Guitar', 'Keys', 'Bass', 'Drums'];
 const ROUND_LABELS: Record<RoundType, string> = {
-  '5to1': '5 to 1',
+  '5to1': 'Less is More',
   'another-level': 'Another Level',
   'music-auction': 'Music Auction',
   'song-in-5-parts': 'Song in 5 Parts',
@@ -628,7 +628,7 @@ export function SetupScreen() {
                   <div style={{ marginTop: '14px', padding: '10px', background: '#1a1a3a', borderRadius: '8px', border: '1px solid #8b5cf644' }}>
                     <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: '6px' }}>
                       <div style={{ fontSize: '0.75rem', color: '#8b5cf6', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-                        Stem arrangement (5 to 1 · Music Auction)
+                        Stem arrangement (Less is More · Song Showdown · Music Auction)
                       </div>
                       {hasCustom && (
                         <button onClick={resetOrder} style={{ ...S.btn, background: '#333', color: '#aaa', fontSize: '0.6rem', padding: '3px 8px' }}>
@@ -637,7 +637,10 @@ export function SetupScreen() {
                       )}
                     </div>
                     <div style={{ fontSize: '0.65rem', color: '#8080a0', marginBottom: '8px', fontStyle: 'italic' }}>
-                      Drag any stem (primary or extra) into a slot. <strong>5 to 1:</strong> slot 1 is what plays alone in the 1-stem song. <strong>Music Auction:</strong> slot 1 is the first offer ($15k), slot 5 is the last ($1k).
+                      Drag any stem (primary or extra) into a slot. Applies globally — every round this song plays in uses this arrangement.
+                      <strong> Less is More:</strong> slot 1 is what plays alone in the 1-stem song.
+                      <strong> Song Showdown:</strong> slot 1 is the first musician to join (highest cash offer).
+                      <strong> Music Auction:</strong> slot 1 is the first offer ($15k), slot 5 is the last ($1k).
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '6px' }}>
                       {order.slice(0, 5).map((stemId, i) => {
@@ -694,7 +697,7 @@ export function SetupScreen() {
                     + Song Showdown
                   </button>
                   <button onClick={() => addToRound('5to1', selected.id)} style={{ ...S.btn, background: '#8b5cf6', color: '#fff', fontSize: '0.7rem', padding: '6px 10px' }}>
-                    + 5 to 1
+                    + Less is More
                   </button>
                   <button onClick={() => addToRound('music-auction', selected.id)} style={{ ...S.btn, background: '#8b5cf6', color: '#fff', fontSize: '0.7rem', padding: '6px 10px' }}>
                     + Music Auction

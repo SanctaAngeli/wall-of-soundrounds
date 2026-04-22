@@ -188,11 +188,14 @@ export function setupSocketHandlers(io: Server, state: GameState) {
     // HOST EVENTS
     // ============================================
 
-    // Helper: for R3 (music-auction) load BOTH primary + extra stems so horns/BVs/LVs actually
-    // produce audio when they appear in auction offers. Other rounds use primary stems only.
+    // Helper: decide which stems to load into the audio engine for a given round.
+    // R3 (music-auction), Less is More (5to1) and Song Showdown all let the host arrange
+    // extras (LVs, horns, BVs) into stem slots via /setup, so they need the full pack.
+    // R2 (parked) and the partless rounds stick to primary stems only.
     const stemsForRound = () => {
       if (!state.currentSong) return [];
-      return state.roundType === 'music-auction'
+      const roundsThatNeedExtras: Array<typeof state.roundType> = ['music-auction', '5to1', 'song-showdown'];
+      return roundsThatNeedExtras.includes(state.roundType)
         ? [...state.currentSong.stems, ...(state.currentSong.extraStems ?? [])]
         : state.currentSong.stems;
     };
@@ -533,6 +536,24 @@ export function setupSocketHandlers(io: Server, state: GameState) {
       broadcastState(io, state);
     });
 
+    // Prove-out: fade all stems in on the current song so the audience hears the real track.
+    // No score/phase change — host uses this after a correct guess (or whenever they want to
+    // play the full song) as a "prove out" moment. Puts all primary+extra stems on the stack.
+    socket.on('host:prove-out', () => {
+      if (!state.currentSong) return;
+      const allStemIds = [
+        ...state.currentSong.stems.map(s => s.id),
+        ...(state.currentSong.extraStems ?? []).map(s => s.id),
+      ];
+      // Ensure the audio engine has them tracked (some rounds only activate a subset).
+      state.activeStems = allStemIds;
+      state.isAudioPlaying = true;
+      // The current audio might be paused (buzz state) — restart play, then fade everything in.
+      sendAudioCommand(io, { action: 'play' });
+      sendAudioCommand(io, { action: 'fade-all-in', duration: 400 });
+      broadcastState(io, state);
+    });
+
     socket.on('host:end-round', () => {
       state.isAudioPlaying = false;
       sendAudioCommand(io, { action: 'stop' });
@@ -753,11 +774,13 @@ export function setupSocketHandlers(io: Server, state: GameState) {
       if (state.phase !== 'showdown-year-pick' && state.phase !== 'result') return;
       const { loaded, firstStem } = showdownPickYear(state, data.songId);
       if (!loaded) return;
-      // Load the song's full stem pack so any stem can fade in
+      // Load BOTH primary + extra stems so arrangements referencing LVs, horns, BVs, etc.
+      // actually produce audio when they fade in. Without this, dropping LV_GAV into slot 1
+      // on /setup produces silence — the audio engine doesn't know about extras unless told.
       sendAudioCommand(io, {
         action: 'load',
         songId: loaded.id,
-        stems: loaded.stems,
+        stems: [...loaded.stems, ...(loaded.extraStems ?? [])],
       });
       // Slight delay to let audio graph wire up before fading in
       setTimeout(() => {

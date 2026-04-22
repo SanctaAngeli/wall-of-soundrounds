@@ -318,6 +318,10 @@ export interface ClientEvents {
   // reads out each player's running total. Orthogonal to game phase; audio/round continues
   // underneath. Pass { show: true } to reveal, { show: false } to dismiss.
   'host:toggle-scores-overlay': { show: boolean };
+  // "Prove out" the current song — fade all stems in so the audience hears the full mix.
+  // Typically used after a correct guess so people hear the real song, but host can trigger
+  // any time the round has a loaded song. No effect on score/phase — purely audio.
+  'host:prove-out': {};
   'host:end-round': {};
   'host:reset': {};
   'host:set-stem': { stemId: number; active: boolean };
@@ -417,7 +421,7 @@ export const ROW_COLORS = [
 ];
 
 export const ROUND_NAMES: Record<RoundType, string> = {
-  '5to1': '5 TO 1',
+  '5to1': 'LESS IS MORE',
   'another-level': 'ANOTHER LEVEL',
   'music-auction': 'MUSIC AUCTION',
   'song-in-5-parts': 'SONG IN 5 PARTS',

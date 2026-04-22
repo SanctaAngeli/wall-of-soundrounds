@@ -466,7 +466,9 @@ export const roundSongSets: Record<RoundType, string[]> = {
 
 // Prize configurations per round
 export const roundPrizes: Record<RoundType, number[]> = {
-  '5to1': [1000, 2000, 3000, 4000, 5000],
+  // "Less is More" (internal id still '5to1' so existing configs / exports keep working).
+  // 5 songs, song 1 plays 5 stems (easy, $3k), song 5 plays 1 stem (hard, $10k jump at the end).
+  '5to1': [3000, 4000, 5000, 6000, 10000],
   'another-level': [1000, 2000, 6000],
   'music-auction': [15000, 6000, 3000, 2000, 1000], // Based on musician count chosen
   'song-in-5-parts': [1000, 2000, 3000, 4000, 5000], // col 1 → col 5; total possible $15k

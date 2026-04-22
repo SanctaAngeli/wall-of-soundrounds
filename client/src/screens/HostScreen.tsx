@@ -1081,6 +1081,42 @@ export function HostScreen() {
                     WRONG — GIVE TO {players[buzzedPlayer === 1 ? 2 : 1].name.toUpperCase()}
                   </button>
                 )}
+                <button
+                  onClick={() => emit('host:prove-out')}
+                  title="Fade all stems in so everyone hears the full mix — great for 'prove out' moments after a correct guess."
+                  style={{
+                    ...styles.controlBtn,
+                    background: '#00d4ff',
+                    color: '#000',
+                    width: '100%',
+                    marginTop: '8px',
+                    fontWeight: 900, letterSpacing: '0.1em',
+                  }}
+                >
+                  ▶ PLAY FULL SONG (prove out)
+                </button>
+              </div>
+            )}
+
+            {/* Prove-out button also available any time a song is loaded and we're not in a
+                dedicated round-specific UI state where it'd be confusing. Host has this even
+                without a live buzz so they can play a song from start after a reveal, etc. */}
+            {currentSong && !buzzedPlayer && phase !== 'lobby' && phase !== 'round-intro' && phase !== 'round-complete' && phase !== 'auction-offers' && phase !== 'auction-bidding' && (
+              <div style={{ ...styles.section, padding: '10px 12px' }}>
+                <button
+                  onClick={() => emit('host:prove-out')}
+                  title="Play the full song to the audience (fades all stems in)."
+                  style={{
+                    ...styles.controlBtn,
+                    background: 'transparent',
+                    color: '#00d4ff',
+                    border: '1px solid #00d4ff66',
+                    width: '100%',
+                    fontWeight: 800, letterSpacing: '0.08em',
+                  }}
+                >
+                  ▶ PLAY FULL SONG — prove out {currentSong.title}
+                </button>
               </div>
             )}
 
@@ -1323,7 +1359,7 @@ function ScoreControl({ name, score, color, eliminated, onAdjust, onSetExact, on
 }
 
 const roundDescs: Record<RoundType, string> = {
-  '5to1': '5 songs. Song 1 plays 5 instruments, song 5 plays just 1. Fewer = harder = more money.',
+  '5to1': 'Less is More — 5 songs. Song 1 plays 5 instruments ($3k), song 5 plays just 1 ($10k). Fewer = harder = more money.',
   'another-level': 'Prize board with 3 levels. Stems play immediately, buzz to guess.',
   'music-auction': 'Musicians make offers, players secretly bid. Fewest musicians wins!',
   'song-in-5-parts': '3 songs scattered across 15 cells. Find the target (announced first). Vocals revealed first, then guitar → drums.',
