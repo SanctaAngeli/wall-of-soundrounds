@@ -23,11 +23,14 @@ DRY_RUN="${DRY_RUN:-0}"
 ONLY="${ONLY:-}"
 
 kebab() {
-  # Strip common export suffixes the band adds to folder names (bpm tags, "R1"/"REMIX" revision
-  # markers) BEFORE kebab-casing. Keeps IDs stable across re-exports and readable in URLs.
+  # Strip common export suffixes the band adds to folder names (bpm tags, "R1"/"REMIX"/"BAN"
+  # revision markers) BEFORE kebab-casing. Keeps IDs stable across re-exports and readable
+  # in URLs. Handles decimal BPMs (e.g. "84.5bpm"), missing dashes ("Stars 125bpm"),
+  # weird spacing, and the "BAN" (band version) suffix seen in A BAND-2.
   echo "$1" \
-    | sed -E 's/[ -]+[0-9]+ ?bpm *//gi' \
-    | sed -E 's/ *-+ *(R1|R2|R3|REMIX|V[0-9]+) *$//i' \
+    | sed -E 's/[ -]+[0-9]+(\.[0-9]+)? ?bpm//gi' \
+    | sed -E 's/ *-+ *(R1|R2|R3|REMIX|V[0-9]+|BAN) *$//i' \
+    | sed -E 's/ +(BAN) *$//i' \
     | tr '[:upper:]' '[:lower:]' \
     | sed "s/'//g" \
     | sed 's/[^a-z0-9]/-/g' \
