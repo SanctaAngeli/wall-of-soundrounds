@@ -117,6 +117,11 @@ export interface GameState {
   // the money they brought into the final.
   wtwStartingScore: number;
 
+  // Snake index where the CURRENT song started. Cells in [wtwSongStartIndex, wtwMusicianIndex]
+  // are "currently playing this song" (lit full gold); cells before it are "spent on a prior
+  // song" (semi-opacity gold); cells after are upcoming. Reset on every song change.
+  wtwSongStartIndex: number;
+
   // Host-triggered scoreboard overlay. Orthogonal to game phase — setting this true at any time
   // displays a big "Player 1: $X, Player 2: $X, Player 3: $X" overlay on the wall. Audio and
   // round state continue underneath. Dismissed with another host click.
@@ -203,6 +208,7 @@ export function createInitialState(): GameState {
     wtwTimerInterval: null,
     wtwWalkawayOffered: null,
     wtwStartingScore: 0,
+    wtwSongStartIndex: 0,
     showScoresOverlay: false,
     demoMode: false,
     demoSnapshot: null,
@@ -481,6 +487,7 @@ function generateWtwWallMusicians(state: GameState): WallMusician[] {
   const musicians: WallMusician[] = [];
   let id = 1;
   const current = state.wtwMusicianIndex;
+  const songStart = state.wtwSongStartIndex;
   const song = state.currentSong;
   // Walk by [row, col] grid order; look up each cell's snake index (position in WTW_SNAKE).
   const snakeIndexOf = (r: number, c: number): number => {
@@ -490,28 +497,55 @@ function generateWtwWallMusicians(state: GameState): WallMusician[] {
     return -1;
   };
 
-  const isGold = state.phase === 'wtw-gold';
+  const isGoldPhase = state.phase === 'wtw-gold';
+  const isPlayingPhase = state.phase === 'wtw-playing';
 
   for (let row = 0; row < 3; row++) {
     for (let col = 0; col < 5; col++) {
       const snakeIdx = snakeIndexOf(row, col);
-      const isCurrent = snakeIdx === current && state.phase === 'wtw-playing';
-      const isSpent = snakeIdx < current;
-      const isPlaying = isCurrent && state.isAudioPlaying;
+      const isCurrentCell = snakeIdx === current && isPlayingPhase;
+      // "Lit this song" = every cell between song-start and current (inclusive) that's been
+      // played during this song. Stays lit full-gold even after the current cell has moved on.
+      const isInCurrentSong = snakeIdx >= songStart && snakeIdx <= current && isPlayingPhase;
+      // "Spent prior songs" = cells played on an earlier song in the same round. Rendered at
+      // semi-opacity so producer + audience can see which musicians are already used up.
+      const isSpentPrior = snakeIdx < songStart && snakeIdx >= 0;
+
+      // WTW is the gold round — every lit cell paints gold. Alpha hex encodes the state:
+      //   full #ffd700       → currently playing this song
+      //   #ffd70066 (~40%)   → spent on a prior song ("burned in")
+      //   ROW_COLORS[r][c]   → upcoming (dim default)
+      let color: string;
+      let isActive: boolean;
+      if (isGoldPhase) {
+        // Jackpot: every cell full gold
+        color = '#ffd700';
+        isActive = true;
+      } else if (isInCurrentSong) {
+        color = '#ffd700';
+        isActive = true;
+      } else if (isSpentPrior) {
+        color = '#ffd70066';    // semi-opacity gold via 8-digit hex (alpha 0x66)
+        isActive = true;
+      } else {
+        color = ROW_COLORS[row][col];
+        isActive = false;
+      }
+
       // Cell's instrument for rendering: use the current song's primary stems, col-indexed for
       // visual continuity (so each cell always has the same instrument glyph across songs).
       const stem = song?.stems[col];
+
       musicians.push({
         id,
         row: row + 1,
         col: col + 1,
         instrument: stem?.instrument ?? '',
         icon: stem?.icon ?? '',
-        // Gold override paints every cell gold on jackpot
-        color: isGold ? '#ffd700' : ROW_COLORS[row][col],
-        // isActive lights the cell up
-        isActive: isGold || isCurrent || (isSpent && !isCurrent ? false : isCurrent),
-        isPlaying,
+        color,
+        isActive,
+        // Only the CURRENT cell pulses — the other lit cells stay static gold.
+        isPlaying: isCurrentCell && state.isAudioPlaying,
       });
       id++;
     }
@@ -1037,6 +1071,7 @@ export function selectRound(state: GameState, round: RoundType, opts: { demo?: b
   state.wtwSurvivor = null;
   state.wtwWalkawayOffered = null;
   state.wtwStartingScore = 0;
+  state.wtwSongStartIndex = 0;
 
   // Round-specific setup
   if (round === 'another-level') {
@@ -2430,6 +2465,8 @@ export function wtwStartSong(state: GameState): { song: Song | null; firstCellIn
 
   // First musician = next in the snake past the spent ones. musicianIndex is global (0-14).
   if (state.wtwMusicianIndex < 0) state.wtwMusicianIndex = 0;
+  // Mark where this song starts in the snake — cells before this are "prior-song spent".
+  state.wtwSongStartIndex = state.wtwMusicianIndex;
 
   // If we've burned all 15 before hitting 6 songs → bust. Bust DOESN'T wipe banked earnings;
   // the survivor still walks with everything they brought into the final (wtwStartingScore).
@@ -2552,45 +2589,114 @@ export function wtwMarkWrong(state: GameState): void {
   state.isAudioPlaying = true;
 }
 
-// Force skip (host button or auto-triggered after 5 musicians). Song is dead, those musicians
-// are spent, move to next song starting at the next snake position.
+// Host-driven manual skip (button). UPDATED BEHAVIOUR: no longer burns musicians. Just
+// advances to the next song in the lineup, taking over from the current snake position. The
+// 5-per-song auto-skip (called via _cause='auto' from wtwAdvanceMusician) still burns the cap.
 export function wtwSkipSong(state: GameState): { bust: boolean } {
   const r = wtwSkipSongInternal(state, 'manual');
   return { bust: r.bust };
 }
 
-function wtwSkipSongInternal(state: GameState, _cause: 'auto' | 'manual'): { stemId: null; autoSkipped: true; bust: boolean } {
+// Host clicks a specific song in the "Songs in Round" list to jump to it right now. Same as
+// manual skip but lets the host pick any song from the lineup (not just the next one). Current
+// cell becomes this song's cell 1; prior cells become spent-prior on the wall.
+export function wtwJumpToSong(state: GameState, lineupIndex: number): { song: Song | null; bust: boolean } {
+  if (state.roundType !== 'win-the-wall') return { song: null, bust: false };
+  if (lineupIndex < 0 || lineupIndex >= state.wtwLineup.length) return { song: null, bust: false };
+  wtwClearTimer(state);
+
+  // Snake exhausted check
+  if (state.wtwMusicianIndex < 0) state.wtwMusicianIndex = 0;
+  if (state.wtwMusicianIndex >= WTW_SNAKE.length) {
+    state.phase = 'wtw-bust';
+    state.currentSong = null;
+    state.activeStems = [];
+    state.isAudioPlaying = false;
+    state.message = `Musicians spent — walk with ${formatMoney(state.wtwStartingScore)}`;
+    return { song: null, bust: true };
+  }
+
+  state.wtwSongIndex = lineupIndex;
+  const song = state.wtwLineup[lineupIndex] ?? null;
+  state.currentSong = song;
+  state.phase = 'wtw-playing';
+  // New song takes over at the CURRENT cell — this becomes its stem 0. Prior cells (before
+  // wtwSongStartIndex) are already marked spent. Cells between the previous song's start and
+  // this jump point become "prior-song spent" once songStartIndex moves.
+  state.wtwSongStartIndex = state.wtwMusicianIndex;
+  state.wtwMusiciansThisSong = 1;
+  state.activeStems = song && song.stems.length > 0 ? [song.stems[0].id] : [];
+  state.isAudioPlaying = true;
+  state.buzzedPlayer = null;
+  state.visualEffect = 'none';
+  state.message = '';
+  state.currentPrize = resolveWtwPrize(state, state.wtwSongsWon + 1);
+  return { song, bust: false };
+}
+
+// Reorder the lineup mid-round. newOrder is the full list of song IDs in the desired order.
+// Keeps wtwLineup in sync with wtwSongIndex so the "current" song stays current even if its
+// position in the list moved.
+export function wtwReorderLineup(state: GameState, newOrder: string[]): void {
+  if (state.roundType !== 'win-the-wall') return;
+  const newLineup = newOrder.map(id => getSongById(id)).filter((s): s is Song => !!s);
+  if (newLineup.length === 0) return;
+
+  // Preserve which song is "current" by finding it in the new order
+  const currentId = state.wtwLineup[state.wtwSongIndex]?.id ?? null;
+  state.wtwLineup = newLineup;
+  state.roundSongs = newLineup;
+  if (currentId) {
+    const newIdx = newLineup.findIndex(s => s.id === currentId);
+    if (newIdx >= 0) state.wtwSongIndex = newIdx;
+  }
+  // Also persist into config so the ordering sticks across round restarts / JSON export.
+  state.config.winTheWallLineup = newLineup.map(s => s.id);
+}
+
+// Internal skip. 'auto' is called when a song burns its 5-musician cap — the cap cells are
+// spent (advance musicianIndex past them). 'manual' is the host button — does NOT burn extras;
+// new song takes over at the current cell.
+function wtwSkipSongInternal(state: GameState, cause: 'auto' | 'manual'): { stemId: null; autoSkipped: true; bust: boolean } {
   wtwClearTimer(state);
   state.wtwSongIndex += 1;
   state.activeStems = [];
   state.isAudioPlaying = false;
   state.buzzedPlayer = null;
-  state.visualEffect = 'wrong';
-  state.message = `Song dropped — ${Math.max(0, state.wtwSongIndex)} / ${state.wtwSongsWon}/6 songs won`;
+  state.visualEffect = cause === 'auto' ? 'wrong' : 'none';
+  state.message = cause === 'auto'
+    ? `5 musicians used — moving on`
+    : `Moving to next song`;
 
-  // Bust check — no songs left in the lineup or snake exhausted?
-  if (state.wtwSongIndex >= state.wtwLineup.length || state.wtwMusicianIndex >= WTW_SNAKE.length) {
+  // Bust check — no songs left in the lineup?
+  if (state.wtwSongIndex >= state.wtwLineup.length) {
     state.phase = 'wtw-bust';
     state.currentSong = null;
-    state.message = 'Out of musicians / songs — walk with nothing';
+    state.message = `Out of songs — walk with ${formatMoney(state.wtwStartingScore)}`;
     return { stemId: null, autoSkipped: true, bust: true };
   }
 
-  // Start next song snake-position = wherever the pointer is now + 1
-  state.wtwMusicianIndex += 1;
-  state.wtwMusiciansThisSong = 0;
+  // Auto-skip already consumed the cap's final cell in wtwAdvanceMusician (it bumped index).
+  // Manual skip leaves musicianIndex where it is — the new song takes over AT the current cell
+  // as its stem 0.
+  if (cause === 'auto') {
+    // No extra advance — wtwAdvanceMusician already moved us to the cell where we'd continue.
+    // Nothing to do here.
+  }
+
+  // Bust check — snake exhausted?
   if (state.wtwMusicianIndex >= WTW_SNAKE.length) {
     state.phase = 'wtw-bust';
     state.currentSong = null;
-    state.message = 'Out of musicians — walk with nothing';
+    state.message = `Out of musicians — walk with ${formatMoney(state.wtwStartingScore)}`;
     return { stemId: null, autoSkipped: true, bust: true };
   }
 
   const nextSong = state.wtwLineup[state.wtwSongIndex] ?? null;
   state.currentSong = nextSong;
   state.phase = 'wtw-playing';
-  state.wtwMusiciansThisSong = 1;                // reset per-song musician count
-  // Fresh song → start cumulative reveal over with just stem 0
+  state.wtwSongStartIndex = state.wtwMusicianIndex;   // new song starts "here"
+  state.wtwMusiciansThisSong = 1;
   state.activeStems = nextSong && nextSong.stems.length > 0 ? [nextSong.stems[0].id] : [];
   state.isAudioPlaying = true;
   return { stemId: null, autoSkipped: true, bust: false };
@@ -2629,6 +2735,7 @@ export function wtwDeclineWalkaway(state: GameState): void {
   const song = state.wtwLineup[state.wtwSongIndex] ?? null;
   state.currentSong = song;
   state.phase = 'wtw-playing';
+  state.wtwSongStartIndex = state.wtwMusicianIndex;   // new song starts here
   state.wtwMusiciansThisSong = 1;
   state.activeStems = song && song.stems.length > 0 ? [song.stems[0].id] : [];
   state.isAudioPlaying = true;

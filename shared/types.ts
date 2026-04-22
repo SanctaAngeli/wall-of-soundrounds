@@ -367,7 +367,9 @@ export interface ClientEvents {
   'host:wtw-set-survivor': { playerId: PlayerId };  // host marks who's playing the endgame
   'host:wtw-start-song': {};                         // begin the snake ticker for next song
   'host:wtw-correct': {};                            // buzz was right → full wall mix celebration, song counts
-  'host:wtw-skip': {};                               // force-skip the current song (all 5 musicians spent)
+  'host:wtw-skip': {};                               // manual next-song (no musician burn)
+  'host:wtw-jump-to-song': { lineupIndex: number };  // jump directly to any song in the lineup
+  'host:wtw-reorder-lineup': { songIds: string[] };  // reorder the WTW lineup mid-round
   'host:wtw-walkaway-accept': {};                    // survivor banked the offered jackpot
   'host:wtw-walkaway-decline': {};                   // survivor continues for more
   'host:wtw-reset': {};                              // reset round state, keep lineup

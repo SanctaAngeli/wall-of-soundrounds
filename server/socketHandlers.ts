@@ -63,6 +63,8 @@ import {
   wtwStartSong,
   wtwAdvanceMusician,
   wtwSkipSong,
+  wtwJumpToSong,
+  wtwReorderLineup,
   wtwAcceptWalkaway,
   wtwDeclineWalkaway,
   wtwSetSurvivor,
@@ -915,6 +917,37 @@ export function setupSocketHandlers(io: Server, state: GameState) {
           startWtwTicker();
         }, 200);
       }
+      broadcastState(io, state);
+    });
+
+    // Jump directly to any song in the lineup mid-round (clicked from "Songs in Round").
+    // No musicians burned — new song takes over at the current snake cell.
+    socket.on('host:wtw-jump-to-song', (data: { lineupIndex: number }) => {
+      if (state.roundType !== 'win-the-wall') return;
+      wtwClearTimer(state);
+      sendAudioCommand(io, { action: 'fade-all-out', duration: 300 });
+      const { song, bust } = wtwJumpToSong(state, data.lineupIndex);
+      if (bust || !song) {
+        sendAudioCommand(io, { action: 'stop' });
+      } else {
+        sendAudioCommand(io, { action: 'load', songId: song.id, stems: song.stems });
+        setTimeout(() => {
+          sendAudioCommand(io, { action: 'play' });
+          for (const sid of state.activeStems) {
+            sendAudioCommand(io, { action: 'fade-in-stem', stemId: sid, duration: 300 });
+          }
+          broadcastState(io, state);
+          startWtwTicker();
+        }, 200);
+      }
+      broadcastState(io, state);
+    });
+
+    // Reorder the WTW lineup mid-round (host up/down arrows). Persists to config too so
+    // the change sticks across restarts.
+    socket.on('host:wtw-reorder-lineup', (data: { songIds: string[] }) => {
+      if (state.roundType !== 'win-the-wall') return;
+      wtwReorderLineup(state, data.songIds);
       broadcastState(io, state);
     });
 

@@ -417,8 +417,9 @@ export function HostScreen() {
                 )}
                 {phase === 'wtw-playing' && (
                   <button onClick={() => emit('host:wtw-skip')}
-                    style={{ ...styles.controlBtn, background: '#ff4444', color: '#fff', width: '100%' }}>
-                    SKIP SONG (burn remaining musicians)
+                    title="Move on to the next song in the lineup. No musicians burned — the new song picks up at the current snake cell."
+                    style={{ ...styles.controlBtn, background: '#00d4ff', color: '#000', width: '100%', fontWeight: 900 }}>
+                    NEXT SONG →
                   </button>
                 )}
 
@@ -1139,7 +1140,7 @@ export function HostScreen() {
             {/* ============================================ */}
             {/* UNIVERSAL: Song List                          */}
             {/* ============================================ */}
-            {songList.length > 0 && (
+            {songList.length > 0 && roundType !== 'win-the-wall' && (
               <div style={styles.section}>
                 <h2 style={styles.sectionTitle}>Songs in Round</h2>
                 <div style={styles.songList}>
@@ -1158,6 +1159,74 @@ export function HostScreen() {
                       <span style={styles.songArtist}>{s.artist}</span>
                     </button>
                   ))}
+                </div>
+              </div>
+            )}
+
+            {/* WTW-specific song list: clickable to jump mid-round, up/down arrows to reorder.
+                No musicians are burned when jumping — new song takes over at the current cell. */}
+            {songList.length > 0 && roundType === 'win-the-wall' && (
+              <div style={styles.section}>
+                <h2 style={styles.sectionTitle}>Songs in Round (click to jump · arrows to reorder)</h2>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  {songList.map((s, i) => {
+                    const isCurrent = s.id === wtwCurrentSongId;
+                    return (
+                      <div key={`${s.id}-${i}`} style={{
+                        display: 'flex', alignItems: 'center', gap: '6px',
+                        padding: '6px 8px',
+                        background: isCurrent ? '#ffd70033' : '#1a1a3a',
+                        border: `1px solid ${isCurrent ? '#ffd700' : '#333'}`,
+                        borderRadius: '6px',
+                      }}>
+                        <span style={{ color: '#ffd700', fontWeight: 800, minWidth: 20, fontSize: '0.7rem' }}>{i + 1}</span>
+                        <button
+                          onClick={() => !isCurrent && emit('host:wtw-jump-to-song', { lineupIndex: i })}
+                          disabled={isCurrent}
+                          title={isCurrent ? 'Currently playing' : 'Jump to this song now (no musicians burned)'}
+                          style={{
+                            flex: 1, textAlign: 'left', background: 'transparent',
+                            border: 'none', color: '#fff', fontSize: '0.78rem',
+                            cursor: isCurrent ? 'default' : 'pointer',
+                            padding: '2px 4px',
+                          }}>
+                          <span style={{ fontWeight: 700 }}>{s.title}</span>
+                          <span style={{ color: '#8080a0', marginLeft: 8 }}>— {s.artist}</span>
+                          {isCurrent && <span style={{ color: '#ffd700', fontSize: '0.6rem', marginLeft: 8, fontWeight: 800, letterSpacing: '0.1em' }}>NOW</span>}
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (i === 0) return;
+                            const ids = songList.map(x => x.id);
+                            [ids[i - 1], ids[i]] = [ids[i], ids[i - 1]];
+                            emit('host:wtw-reorder-lineup', { songIds: ids });
+                          }}
+                          disabled={i === 0}
+                          title="Move up"
+                          style={{
+                            padding: '2px 6px', fontSize: '0.7rem',
+                            background: i === 0 ? '#0a0a1a' : '#333', color: i === 0 ? '#444' : '#fff',
+                            border: '1px solid #444', borderRadius: 3,
+                            cursor: i === 0 ? 'not-allowed' : 'pointer',
+                          }}>▲</button>
+                        <button
+                          onClick={() => {
+                            if (i === songList.length - 1) return;
+                            const ids = songList.map(x => x.id);
+                            [ids[i], ids[i + 1]] = [ids[i + 1], ids[i]];
+                            emit('host:wtw-reorder-lineup', { songIds: ids });
+                          }}
+                          disabled={i === songList.length - 1}
+                          title="Move down"
+                          style={{
+                            padding: '2px 6px', fontSize: '0.7rem',
+                            background: i === songList.length - 1 ? '#0a0a1a' : '#333', color: i === songList.length - 1 ? '#444' : '#fff',
+                            border: '1px solid #444', borderRadius: 3,
+                            cursor: i === songList.length - 1 ? 'not-allowed' : 'pointer',
+                          }}>▼</button>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
