@@ -817,6 +817,71 @@ export function SetupScreen() {
             );
           })()}
 
+          {/* Song Showdown — Toss Up song picker. Single-song drop zone for the opener.
+              Fixed $1k prize, free-for-all buzz, plays BEFORE the 6 main songs. Winner banks $1k
+              and picks the first year. Clear this to skip the toss-up entirely. */}
+          {activeRoundTab === 'song-showdown' && (() => {
+            const tossUpId = config.songShowdownTossUp ?? '';
+            const tossUpSong = tossUpId ? songById(tossUpId) : undefined;
+            const isHot = dragOverRound === 'song-showdown-tossup';
+            return (
+              <div
+                onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setDragOverRound('song-showdown-tossup'); }}
+                onDragLeave={() => setDragOverRound(null)}
+                onDrop={e => {
+                  e.preventDefault();
+                  setDragOverRound(null);
+                  const songId = e.dataTransfer.getData('application/x-wos-song');
+                  if (songId) emit('host:config-set-showdown-tossup', { songId });
+                }}
+                style={{
+                  marginTop: '14px', padding: '10px',
+                  background: isHot ? '#ff8c0015' : '#0a0a1a',
+                  border: isHot ? '2px dashed #ff8c00' : '1px dashed #ff8c0066',
+                  borderRadius: '8px',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: '6px' }}>
+                  <div style={{ fontSize: '0.72rem', color: '#ff8c00', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                    Toss Up song (plays first · $1,000 free-for-all)
+                  </div>
+                  {tossUpId && (
+                    <button
+                      onClick={() => emit('host:config-set-showdown-tossup', { songId: '' })}
+                      style={{ ...S.btn, background: '#333', color: '#aaa', fontSize: '0.6rem', padding: '3px 8px' }}
+                    >
+                      Clear (skip toss-up)
+                    </button>
+                  )}
+                </div>
+                <div style={{ fontSize: '0.65rem', color: '#8080a0', marginBottom: '8px', fontStyle: 'italic' }}>
+                  Before the 6 main songs, this song plays as a $1k warm-up. Anyone can buzz (no lockout), winner banks $1k and picks the first year. Pick a song NOT already in the main lineup.
+                </div>
+                {tossUpSong ? (
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: '8px',
+                    padding: '8px 10px',
+                    background: '#ff8c0022',
+                    border: '1px solid #ff8c0088',
+                    borderRadius: '6px',
+                  }}>
+                    <span style={{ fontSize: '1.1rem' }}>🎺</span>
+                    <span style={{ flex: 1, color: '#fff', fontWeight: 800, fontSize: '0.85rem' }}>
+                      {tossUpSong.title}
+                    </span>
+                    <span style={{ color: '#a0a0b0', fontSize: '0.72rem' }}>
+                      {tossUpSong.artist} · {tossUpSong.year}
+                    </span>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: '0.7rem', color: '#666', fontStyle: 'italic', padding: '8px', textAlign: 'center' }}>
+                    No toss-up set — round will start straight on the year picker. Drag a song here to enable.
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
           {/* Demo lineup for any round — a short (3-song) alternate the host can run as a dry-run.
               Without a configured demo, the first 3 songs of the main lineup are used. Shown for
               all tabs where the drop-zone editor applies (R1 / R3 / Showdown / WTW). */}

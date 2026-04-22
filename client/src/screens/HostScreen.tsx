@@ -164,10 +164,15 @@ export function HostScreen() {
             {/* ============================================ */}
             {/* SONG SHOWDOWN controls                        */}
             {/* ============================================ */}
-            {roundType === 'song-showdown' && showdownYearsVisible && (
+            {roundType === 'song-showdown' && showdownYearsVisible && (() => {
+              const inTossUp = phase === 'showdown-toss-up'
+                || (phase === 'buzzed' && (showdownSongsPlayed ?? 0) === 0 && currentSong && !hostState.showdownCurrentSongId === false && (showdownSelectedRow === 2));
+              return (
               <div style={styles.section}>
                 <h2 style={styles.sectionTitle}>
-                  Song Showdown — Song {(showdownSongsPlayed ?? 0) + 1}/6
+                  {inTossUp || (phase === 'result' && (showdownSongsPlayed ?? 0) === 0 && showdownSelectedRow === 2)
+                    ? <>Song Showdown — <span style={{ color: '#ff8c00' }}>TOSS UP</span> ($1,000)</>
+                    : <>Song Showdown — Song {(showdownSongsPlayed ?? 0) + 1}/6</>}
                   {(showdownSongsPlayed ?? 0) >= 3 && <span style={{ marginLeft: 8, color: '#ffd700', fontSize: '0.75rem', fontWeight: 700 }}>DOUBLE STAKES</span>}
                 </h2>
 
@@ -257,6 +262,16 @@ export function HostScreen() {
                   </button>
                 )}
 
+                {/* Toss-up skip button — visible only while the toss-up is in progress */}
+                {inTossUp && (
+                  <button
+                    onClick={() => emit('host:showdown-skip-toss-up')}
+                    title="No one's guessing — move on without awarding the $1k. Main game starts with a random controller."
+                    style={{ ...styles.controlBtn, background: '#666', color: '#fff', marginTop: 10, width: '100%', fontSize: '0.75rem' }}>
+                    SKIP TOSS UP →
+                  </button>
+                )}
+
                 {/* Controller picker override (if host needs to force) */}
                 <details style={{ marginTop: 10 }}>
                   <summary style={{ fontSize: '0.7rem', color: '#666', cursor: 'pointer' }}>Override controller</summary>
@@ -279,7 +294,8 @@ export function HostScreen() {
                   </div>
                 </details>
               </div>
-            )}
+              );
+            })()}
 
             {/* ============================================ */}
             {/* WIN THE WALL controls                         */}

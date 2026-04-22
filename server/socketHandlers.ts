@@ -43,6 +43,8 @@ import {
   setAuctionOverride,
   setSongYearOverride,
   setShowdownLineup,
+  setShowdownTossUp,
+  showdownSkipTossUp,
   setWtwLineup,
   setWtwPrizes,
   setPlayerEliminated,
@@ -213,6 +215,19 @@ export function setupSocketHandlers(io: Server, state: GameState) {
           songId: state.currentSong.id,
           stems: stemsForRound(),
         });
+        // Song Showdown kicks off with a toss-up if one is configured. Auto-start audio + ticker
+        // so the opener plays the moment the round begins — matches producer intent ("plays like
+        // a normal song for Song Showdown"). Host still has pause/buzz controls as normal.
+        if (data.round === 'song-showdown' && state.phase === 'showdown-toss-up') {
+          setTimeout(() => {
+            sendAudioCommand(io, { action: 'play' });
+            for (const stemId of state.activeStems) {
+              sendAudioCommand(io, { action: 'fade-in-stem', stemId, duration: 400 });
+            }
+            broadcastState(io, state);
+            startShowdownTicker();
+          }, 250);
+        }
       }
       broadcastState(io, state);
     });
@@ -349,6 +364,11 @@ export function setupSocketHandlers(io: Server, state: GameState) {
       broadcastState(io, state);
     });
 
+    socket.on('host:config-set-showdown-tossup', (data: { songId: string }) => {
+      setShowdownTossUp(state, data.songId || null);
+      broadcastState(io, state);
+    });
+
     socket.on('host:config-reset', () => {
       resetConfig(state);
       broadcastState(io, state);
@@ -400,17 +420,16 @@ export function setupSocketHandlers(io: Server, state: GameState) {
           sendAudioCommand(io, { action: 'fade-in-stem', stemId, duration: 200 });
         }
       }
-      // Song Showdown: buzzer locked out of song, ticker resumes. Restart the 5s interval.
-      if (state.roundType === 'song-showdown' && state.phase === 'playing') {
+      // Song Showdown: buzzer locked out of song (or toss-up free-for-all), ticker resumes.
+      // Restart the 5s interval covering both the main-song and toss-up phases.
+      if (state.roundType === 'song-showdown' && (state.phase === 'playing' || state.phase === 'showdown-toss-up')) {
         sendAudioCommand(io, { action: 'play' });
         for (const sid of state.activeStems) {
           sendAudioCommand(io, { action: 'fade-in-stem', stemId: sid, duration: 200 });
         }
-        // Restart ticker (handler closure captures startShowdownTicker — but this mark-wrong
-        // lives outside that closure). Call the gameState helper + kick off the timer inline.
         showdownClearTimer(state);
         state.showdownTimerInterval = setInterval(() => {
-          if (state.roundType !== 'song-showdown' || state.phase !== 'playing') {
+          if (state.roundType !== 'song-showdown' || (state.phase !== 'playing' && state.phase !== 'showdown-toss-up')) {
             showdownClearTimer(state);
             return;
           }
@@ -755,7 +774,8 @@ export function setupSocketHandlers(io: Server, state: GameState) {
     const startShowdownTicker = () => {
       showdownClearTimer(state);
       state.showdownTimerInterval = setInterval(() => {
-        if (state.roundType !== 'song-showdown' || state.phase !== 'playing') {
+        // Runs during main-song 'playing' OR 'showdown-toss-up' (same cadence, different prize rules).
+        if (state.roundType !== 'song-showdown' || (state.phase !== 'playing' && state.phase !== 'showdown-toss-up')) {
           showdownClearTimer(state);
           return;
         }
@@ -763,8 +783,8 @@ export function setupSocketHandlers(io: Server, state: GameState) {
         if (stemId != null) {
           sendAudioCommand(io, { action: 'fade-in-stem', stemId, duration: 400 });
         }
-        // If we've hit the floor, the tier stops advancing but audio keeps playing at $500.
-        // No more stems to add; let it loop until a buzz or host-forced next-song.
+        // If we've hit the floor, the tier stops advancing but audio keeps playing. No more
+        // stems to add; let it loop until a buzz or host-forced next-song / skip.
         broadcastState(io, state);
       }, 5000);
     };
@@ -799,6 +819,13 @@ export function setupSocketHandlers(io: Server, state: GameState) {
       if (state.roundType !== 'song-showdown') return;
       sendAudioCommand(io, { action: 'stop' });
       showdownNextSong(state);
+      broadcastState(io, state);
+    });
+
+    socket.on('host:showdown-skip-toss-up', () => {
+      if (state.roundType !== 'song-showdown') return;
+      sendAudioCommand(io, { action: 'stop' });
+      showdownSkipTossUp(state);
       broadcastState(io, state);
     });
 

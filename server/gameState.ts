@@ -94,6 +94,10 @@ export interface GameState {
   showdownTier: number;                      // 0-4 index into the ladder; tier 0 = 1 stem playing, tier 4 = all 5
   showdownLockedPlayers: PlayerId[];         // wrong-buzz lockout for the CURRENT showdown song; cleared on next song
   showdownTimerInterval: ReturnType<typeof setInterval> | null;
+  // Toss Up (opening question, fixed $1k, free-for-all). Becomes true as soon as the toss-up
+  // is resolved (won or skipped) — drives showdownNextSong to transition to year-pick rather
+  // than advancing the main 6-song counter.
+  showdownTossUpResolved: boolean;
 
   // ============================================
   // WIN THE WALL (endgame, 1 survivor)
@@ -188,6 +192,7 @@ export function createInitialState(): GameState {
     showdownTier: 0,
     showdownLockedPlayers: [],
     showdownTimerInterval: null,
+    showdownTossUpResolved: false,
     // Win the Wall initial state
     wtwLineup: [],
     wtwMusicianIndex: -1,
@@ -208,6 +213,9 @@ export function createInitialState(): GameState {
       stemOrderBySong: {},
       musicAuctionOverrides: {},
       songYearOverrides: {},
+      // Song Showdown toss-up defaults to a broadly-known song not in any other round's pool.
+      // Host can swap via /setup → Song Showdown tab → Toss Up picker.
+      songShowdownTossUp: 'murder-on-the-dance-floor',
     },
   };
 }
@@ -284,6 +292,15 @@ export function setShowdownLineup(state: GameState, songIds: string[]): void {
   state.config.songShowdownLineup = songIds;
 }
 
+// Set the Song Showdown toss-up song (or clear by passing '' / null).
+export function setShowdownTossUp(state: GameState, songId: string | null): void {
+  if (!songId) {
+    state.config.songShowdownTossUp = '';
+  } else {
+    state.config.songShowdownTossUp = songId;
+  }
+}
+
 export function setWtwLineup(state: GameState, songIds: string[]): void {
   state.config.winTheWallLineup = songIds;
 }
@@ -318,6 +335,7 @@ export function resetConfig(state: GameState): void {
     musicAuctionOverrides: {},
     songYearOverrides: {},
     songShowdownLineup: [],
+    songShowdownTossUp: 'murder-on-the-dance-floor',
     winTheWallLineup: [],
     winTheWallPrizes: {},
     demoLineup: {},
@@ -336,6 +354,7 @@ export function importConfig(state: GameState, config: GameConfig): void {
     musicAuctionOverrides: config.musicAuctionOverrides ?? {},
     songYearOverrides: config.songYearOverrides ?? {},
     songShowdownLineup: config.songShowdownLineup ?? [],
+    songShowdownTossUp: config.songShowdownTossUp ?? '',
     winTheWallLineup: config.winTheWallLineup ?? [],
     winTheWallPrizes: config.winTheWallPrizes ?? {},
     demoLineup: config.demoLineup ?? {},
@@ -690,6 +709,7 @@ export function deriveWallState(state: GameState): WallState {
     showdownLadder: state.roundType === 'song-showdown' ? showdownLadder(state) : undefined,
     showdownSongsPlayed: state.roundType === 'song-showdown' ? state.showdownSongsPlayed : undefined,
     showdownLockedPlayers: state.roundType === 'song-showdown' ? state.showdownLockedPlayers : undefined,
+    showdownSelectedRow: state.roundType === 'song-showdown' ? state.showdownSelectedRow : undefined,
     // Win the Wall wall fields
     wtwMusicianIndex: state.roundType === 'win-the-wall' ? state.wtwMusicianIndex : undefined,
     wtwSpentMusicians: state.roundType === 'win-the-wall' ? buildWtwSpent(state) : undefined,
@@ -744,9 +764,10 @@ export function derivePlayerState(state: GameState, playerId: PlayerId): PlayerS
   // Song Showdown wrong-buzz lockout is honoured via per-song locked list.
   let canBuzz =
     !player.eliminated
-    && (state.phase === 'playing' || state.phase === 'parts-playing' || state.phase === 'wrong-other-player' || state.phase === 'wtw-playing')
+    && (state.phase === 'playing' || state.phase === 'parts-playing' || state.phase === 'wrong-other-player' || state.phase === 'wtw-playing' || state.phase === 'showdown-toss-up')
     && state.buzzedPlayer === null;
-  if (canBuzz && state.roundType === 'song-showdown' && state.showdownLockedPlayers.includes(playerId)) canBuzz = false;
+  // Toss-up is free-for-all — lockout list doesn't apply there.
+  if (canBuzz && state.roundType === 'song-showdown' && state.phase !== 'showdown-toss-up' && state.showdownLockedPlayers.includes(playerId)) canBuzz = false;
   if (canBuzz && state.roundType === 'win-the-wall' && state.wtwSurvivor !== playerId) canBuzz = false;
 
   let resultMessage = '';
@@ -1006,6 +1027,7 @@ export function selectRound(state: GameState, round: RoundType, opts: { demo?: b
   state.showdownStemJoinOrder = [];
   state.showdownTier = 0;
   state.showdownLockedPlayers = [];
+  state.showdownTossUpResolved = false;
   wtwClearTimer(state);
   state.wtwLineup = [];
   state.wtwMusicianIndex = -1;
@@ -1055,8 +1077,28 @@ export function selectRound(state: GameState, round: RoundType, opts: { demo?: b
       state.showdownYearsPlayed = [];
       state.showdownSongsPlayed = 0;
       state.showdownLockedPlayers = [];
-      state.showdownControllerPlayer = pickRandomActivePlayer(state);
-      state.phase = 'showdown-year-pick';
+      state.showdownControllerPlayer = null;
+      state.showdownTossUpResolved = false;
+
+      // If a toss-up song is configured (and we're not in demo mode), start there. Toss-up is
+      // a fixed-$1k free-for-all preamble played BEFORE the 6 main songs. Winner banks $1k and
+      // becomes controller of the first year pick. Skipping / no-one-buzzes-correctly → random
+      // controller at year-pick, no award. Demo rounds skip toss-up entirely (they're short).
+      const tossUpId = opts.demo ? null : state.config.songShowdownTossUp;
+      const tossUpSong = tossUpId ? getSongById(tossUpId) : null;
+      if (tossUpSong) {
+        state.currentSong = tossUpSong;
+        state.showdownSelectedRow = 2;   // middle row lights during toss-up for visual
+        state.showdownStemJoinOrder = resolveShowdownStemOrder(state, tossUpSong);
+        state.showdownTier = 0;
+        state.activeStems = state.showdownStemJoinOrder.slice(0, 1);
+        state.currentPrize = 1000;       // fixed, no ladder
+        state.phase = 'showdown-toss-up';
+      } else {
+        state.showdownTossUpResolved = true;   // no toss-up to play
+        state.showdownControllerPlayer = pickRandomActivePlayer(state);
+        state.phase = 'showdown-year-pick';
+      }
     }
   }
 
@@ -1270,7 +1312,7 @@ export function revealAll(state: GameState): number[] {
 }
 
 export function playerBuzz(state: GameState, playerId: PlayerId): boolean {
-  const buzzablePhases: GamePhase[] = ['playing', 'parts-playing', 'wrong-other-player', 'wtw-playing'];
+  const buzzablePhases: GamePhase[] = ['playing', 'parts-playing', 'wrong-other-player', 'wtw-playing', 'showdown-toss-up'];
   if (!buzzablePhases.includes(state.phase) || state.buzzedPlayer !== null) return false;
   // Eliminated players can't buzz at all.
   if (state.players[playerId]?.eliminated) return false;
@@ -1280,8 +1322,8 @@ export function playerBuzz(state: GameState, playerId: PlayerId): boolean {
   if ((state.roundType === 'music-auction' || state.roundType === 'song-in-5-parts') && playerId === 3) return false;
   // R4: player locked out for the current column can't buzz
   if (state.roundType === 'song-in-5-parts' && (playerId === 1 || playerId === 2) && state.partsLockedPlayers.includes(playerId)) return false;
-  // Song Showdown: wrong-buzz lockout applies per song
-  if (state.roundType === 'song-showdown' && state.showdownLockedPlayers.includes(playerId)) return false;
+  // Song Showdown: wrong-buzz lockout applies per song — BUT not during toss-up (free-for-all).
+  if (state.roundType === 'song-showdown' && state.phase !== 'showdown-toss-up' && state.showdownLockedPlayers.includes(playerId)) return false;
   // Win the Wall: only the survivor can buzz
   if (state.roundType === 'win-the-wall' && state.wtwSurvivor !== playerId) return false;
 
@@ -2138,8 +2180,25 @@ export function showdownPickYear(state: GameState, songId: string): { loaded: So
 
 // Advance one tier: add next stem, drop prize value. Returns the stem to fade in (or null if at cap).
 export function showdownAdvanceTier(state: GameState): number | null {
-  if (state.roundType !== 'song-showdown' || state.phase !== 'playing') return null;
+  if (state.roundType !== 'song-showdown') return null;
+  // Ticker runs during the main-song 'playing' phase AND the 'showdown-toss-up' phase.
+  if (state.phase !== 'playing' && state.phase !== 'showdown-toss-up') return null;
+
   const nextTier = state.showdownTier + 1;
+
+  // Toss-up: fixed $1k, no ladder. Just add the next stem on each tick until all 5 are in,
+  // then hold. Audio keeps playing at full mix until a correct buzz or skip.
+  if (state.phase === 'showdown-toss-up') {
+    if (nextTier >= state.showdownStemJoinOrder.length) return null;  // all stems already in
+    state.showdownTier = nextTier;
+    const nextStemId = state.showdownStemJoinOrder[nextTier];
+    if (nextStemId != null && !state.activeStems.includes(nextStemId)) {
+      state.activeStems = [...state.activeStems, nextStemId];
+    }
+    // currentPrize stays at 1000 throughout toss-up
+    return nextStemId ?? null;
+  }
+
   const ladder = showdownLadder(state);
   if (nextTier >= ladder.length) {
     // Already at the floor ($500 or $1000 doubled). Stay put — song keeps playing, buzz still open.
@@ -2156,11 +2215,29 @@ export function showdownAdvanceTier(state: GameState): number | null {
 }
 
 // Correct buzz: buzzer banks the current tier's cash and becomes the next controller.
+// During toss-up, banks the fixed $1k + becomes controller of the FIRST main-round year pick.
 export function showdownMarkCorrect(state: GameState): void {
   if (state.roundType !== 'song-showdown') return;
   const buzzer = state.buzzedPlayer;
   if (!buzzer) return;
   showdownClearTimer(state);
+
+  // Toss-up correct: fixed +$1k into banked score, winner picks first year, mark toss-up done.
+  // NB: can't rely on state.phase here — playerBuzz flipped it to 'buzzed'. The stable signal
+  // for "currently in toss-up" is resolved=false AND no main songs played yet.
+  const inTossUp = !state.showdownTossUpResolved && state.showdownSongsPlayed === 0;
+  if (inTossUp) {
+    state.players[buzzer].score += 1000;
+    state.showdownControllerPlayer = buzzer;
+    state.showdownTossUpResolved = true;
+    state.phase = 'result';
+    state.visualEffect = 'correct';
+    state.message = `TOSS UP! ${state.players[buzzer].name} banks ${formatMoney(1000)}`;
+    state.isAudioPlaying = false;
+    return;
+  }
+
+  // Normal main-round correct: buzzer gets current tier, becomes next year-pick controller.
   state.players[buzzer].score += state.currentPrize;
   state.showdownControllerPlayer = buzzer;
   state.phase = 'result';
@@ -2169,11 +2246,25 @@ export function showdownMarkCorrect(state: GameState): void {
   state.isAudioPlaying = false;
 }
 
-// Wrong buzz: lock the buzzer out of this song, resume the ticker. No score penalty.
+// Wrong buzz: lock the buzzer out of this song (main round) OR free-for-all (toss-up).
 export function showdownMarkWrong(state: GameState): void {
   if (state.roundType !== 'song-showdown') return;
   const buzzer = state.buzzedPlayer;
   if (!buzzer) return;
+
+  // Toss-up: free-for-all. Same "phase is 'buzzed' right now" caveat as mark-correct — detect
+  // toss-up via the stable resolved/songsPlayed signal.
+  const inTossUp = !state.showdownTossUpResolved && state.showdownSongsPlayed === 0;
+  if (inTossUp) {
+    state.buzzedPlayer = null;
+    state.phase = 'showdown-toss-up';   // resume ticker + keep buzz open
+    state.visualEffect = 'wrong';
+    state.message = `${state.players[buzzer].name} — wrong! (free-for-all)`;
+    state.isAudioPlaying = true;
+    return;
+  }
+
+  // Main round: per-song lockout
   if (!state.showdownLockedPlayers.includes(buzzer)) {
     state.showdownLockedPlayers.push(buzzer);
   }
@@ -2184,19 +2275,40 @@ export function showdownMarkWrong(state: GameState): void {
   state.isAudioPlaying = true;
 }
 
-// Move to the next song: rotate the year out, replace from reserve, increment count, check for
-// end-of-round elimination. If 6 songs done → compute lowest and eliminate.
+// Move to the next song. If we're still resolving the toss-up (just won / just skipped), this
+// transitions to the year-pick phase WITHOUT consuming a main-song slot. Otherwise it's the
+// normal main-round advance: rotate the year out, count the song, check elimination.
 export function showdownNextSong(state: GameState): { complete: boolean } {
   if (state.roundType !== 'song-showdown') return { complete: false };
   showdownClearTimer(state);
 
-  // Stash the played song
+  // Toss-up branch: we just finished the opener. Transition to year-pick without counting
+  // it as one of the 6 main songs. Controller is already set (winner in mark-correct, or
+  // random on skip via showdownSkipTossUp).
+  if (state.showdownTossUpResolved && state.showdownSongsPlayed === 0 && state.showdownSelectedRow === 2) {
+    state.currentSong = null;
+    state.showdownSelectedRow = 0;
+    state.showdownStemJoinOrder = [];
+    state.showdownTier = 0;
+    state.showdownLockedPlayers = [];
+    state.activeStems = [];
+    state.currentPrize = 0;
+    state.buzzedPlayer = null;
+    state.visualEffect = 'none';
+    state.message = '';
+    // If controller wasn't set (toss-up was skipped without a win), pick randomly now.
+    if (!state.showdownControllerPlayer) {
+      state.showdownControllerPlayer = pickRandomActivePlayer(state);
+    }
+    state.phase = 'showdown-year-pick';
+    return { complete: false };
+  }
+
+  // Main-round branch (unchanged): stash the played song, rotate year from reserve, increment.
   const playedRow = state.showdownSelectedRow - 1;
   const playedId = playedRow >= 0 ? state.showdownYearsVisible[playedRow] : null;
   if (playedId) state.showdownYearsPlayed.push(playedId);
 
-  // Replace that visible slot from reserve (if any). If reserve exhausted, slot becomes empty —
-  // the wall will render it dim so controller can still pick from whatever's left.
   if (playedRow >= 0) {
     const replacement = state.showdownYearsReserve.shift();
     if (replacement) {
@@ -2226,6 +2338,19 @@ export function showdownNextSong(state: GameState): { complete: boolean } {
 
   state.phase = 'showdown-year-pick';
   return { complete: false };
+}
+
+// Skip the toss-up without awarding. Marks resolved; host still clicks "next song" to
+// transition to year-pick (handled by showdownNextSong's toss-up branch above).
+export function showdownSkipTossUp(state: GameState): void {
+  if (state.roundType !== 'song-showdown' || state.phase !== 'showdown-toss-up') return;
+  showdownClearTimer(state);
+  state.showdownTossUpResolved = true;
+  state.phase = 'result';
+  state.visualEffect = 'none';
+  state.message = 'Toss Up skipped';
+  state.isAudioPlaying = false;
+  state.buzzedPlayer = null;
 }
 
 // End-of-round elimination: mark the single lowest-scorer as eliminated. If there's a tie for

@@ -204,8 +204,12 @@ export function WallScreen() {
             ))}
           </div>
           {/* Song Showdown: year label pinned to each wall row. Grid overlay matches wallGrid's
-              rows exactly so "1958 / 1973 / 1984" sit smack in their row's vertical band. */}
-          {wallState.roundType === 'song-showdown' && showdownRows && (
+              rows exactly so "1958 / 1973 / 1984" sit smack in their row's vertical band.
+              Hidden during the toss-up arc (toss-up doesn't use the year grid — see banner below). */}
+          {wallState.roundType === 'song-showdown' && showdownRows
+            && phase !== 'showdown-toss-up'
+            && !(wallState.showdownSongsPlayed === 0 && wallState.showdownSelectedRow === 2)  // covers 'buzzed' / 'result' mid-toss-up
+            && (
             <div style={{
               position: 'absolute', inset: 0,
               display: 'grid', gridTemplateRows: 'repeat(3, 1fr)',
@@ -220,9 +224,6 @@ export function WallScreen() {
                   <div style={{
                     fontFamily: 'Montserrat', fontWeight: 900,
                     fontSize: 'clamp(2.5rem, 7vw, 6rem)',
-                    // Every year label is gold now — selected row just glows stronger so the
-                    // picked year still reads as "the active one" but the others stay fully
-                    // legible on-camera.
                     color: '#ffd700',
                     textShadow: r.selected
                       ? '0 0 40px #ffd700cc, 0 0 80px #ffd70080'
@@ -233,6 +234,38 @@ export function WallScreen() {
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* Song Showdown TOSS UP banner — big "TOSS UP · $1,000" overlay during the opener.
+              Shows throughout the toss-up arc (toss-up / buzzed / result while songsPlayed=0). */}
+          {wallState.roundType === 'song-showdown'
+            && (phase === 'showdown-toss-up' || (wallState.showdownSongsPlayed === 0 && wallState.showdownSelectedRow === 2))
+            && phase !== 'round-complete' && (
+            <div style={{
+              position: 'absolute', top: '14%', left: '50%', transform: 'translateX(-50%)',
+              zIndex: 4, pointerEvents: 'none', textAlign: 'center',
+              animation: 'scale-in 0.4s ease-out',
+            }}>
+              <div style={{
+                fontFamily: 'Montserrat', fontWeight: 900,
+                fontSize: 'clamp(1.6rem, 4vw, 3.2rem)',
+                background: 'linear-gradient(135deg, #ff8c00, #ffd700)',
+                WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
+                letterSpacing: '0.3em',
+                filter: 'drop-shadow(0 0 20px #ff8c0080)',
+              }}>
+                TOSS UP
+              </div>
+              <div style={{
+                fontFamily: 'Montserrat', fontWeight: 900,
+                fontSize: 'clamp(2.5rem, 6vw, 5rem)',
+                color: '#ffd700',
+                textShadow: '0 0 30px #ffd700aa',
+                letterSpacing: '0.05em',
+              }}>
+                $1,000
+              </div>
             </div>
           )}
         </div>

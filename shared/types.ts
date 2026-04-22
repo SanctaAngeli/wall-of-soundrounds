@@ -46,6 +46,9 @@ export type GamePhase =
   // Song in 5 Parts specific
   | 'parts-intro'
   | 'parts-playing'
+  // Song Showdown: dedicated "Toss Up" opener. One song worth $1k, free-for-all (no lockout),
+  // winner banks $1k and picks the first year of the main game.
+  | 'showdown-toss-up'
   // Song Showdown specific: controller picks a year from the 3 visible rows
   | 'showdown-year-pick'
   // Win the Wall specific
@@ -129,6 +132,7 @@ export interface WallState {
   showdownLadder?: number[];                 // 5-entry ladder, already doubled if songsPlayed >= 3
   showdownSongsPlayed?: number;              // 0-6
   showdownLockedPlayers?: PlayerId[];        // wrong-buzz lockout for current showdown song only
+  showdownSelectedRow?: number;              // 1-3 of the wall row currently playing; 2 during toss-up
   // Win the Wall
   wtwMusicianIndex?: number;                 // 0-14 (snake position, current musician playing)
   wtwSpentMusicians?: number[];              // indices already used, rendered faded
@@ -373,6 +377,11 @@ export interface ClientEvents {
   // Pass `null` for a value to reset that gate to the hard-coded default ($50k/$100k/$250k).
   'host:config-set-wtw-prizes': { gate3?: number | null; gate5?: number | null; gate6?: number | null };
   'host:config-set-demo-lineup': { round: RoundType; songIds: string[] };
+  // Song Showdown toss-up song. Pass empty string to remove / skip toss-up.
+  'host:config-set-showdown-tossup': { songId: string };
+  // Host skips the currently-playing toss-up without awarding anyone (nobody guessed, or
+  // producer wants to move on). Transitions to the normal year-pick phase with a random controller.
+  'host:showdown-skip-toss-up': {};
 }
 
 // Server -> Client
@@ -458,6 +467,11 @@ export interface GameConfig {
   // Song Showdown: ordered pool of songs (at least 6 required — 3 visible + 3 replacements).
   // Each song's effective year (via songYearOverrides or baked year) is what's shown on the wall.
   songShowdownLineup?: string[];
+  // Song Showdown: optional single "Toss Up" song that plays FIRST (before the 6 main songs).
+  // Fixed $1k prize, free-for-all buzz (no lockout on wrong), winner's $1k banks toward the
+  // 6-song elimination threshold and they pick the first real-round year. Clear this (empty
+  // string) to skip toss-up and start the round on the year-picker as before.
+  songShowdownTossUp?: string;
   // Win the Wall: ordered song pool for the endgame. Up to 8 songs — round needs 6 to clear,
   // alternates stand by in case of producer curveballs between takes.
   winTheWallLineup?: string[];
