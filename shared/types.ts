@@ -54,6 +54,7 @@ export type GamePhase =
   // Win the Wall specific
   | 'wtw-playing'                 // musician snake is ticking, buzz open
   | 'wtw-walkaway-offer'          // at 3 or 5 songs: offer walkaway vs keep-going
+  | 'wtw-song-won'                // between-gate correct (songs 1, 2, 4): celebration; host taps Next Song
   | 'wtw-gold'                    // all 6 — wall turns gold, jackpot won (default $250k, host-configurable)
   | 'wtw-bust';                   // burned all 15 musicians without 3 — walks with nothing
 
@@ -107,6 +108,11 @@ export interface WallState {
   message?: string;
   // Auction: which musician is making the current offer
   auctionHighlight?: { cellId: number; offerText: string } | null;
+  // Auction: the 5 tiers (1-musician through 5-musicians) shown as a side pyramid
+  // on the wall during the offers/bidding phases. Index 0 = 1 musician, index 4 = 5 musicians.
+  auctionOffersLadder?: { musicianCount: number; prize: number; instrument: string; icon: string; color: string }[];
+  // Auction: index into auctionOffersLadder for the currently-being-revealed offer. -1 = none yet.
+  auctionCurrentOffer?: number;
   // Auction: bid reveal
   auctionBids?: { player1: number | null; player2: number | null };
   auctionWinner?: 1 | 2 | 'tied' | null;
@@ -331,6 +337,8 @@ export interface ClientEvents {
   'host:set-stem': { stemId: number; active: boolean };
   // Reveal the current song's title + artist on the wall (all rounds)
   'host:reveal-song': {};
+  // Dismiss the reveal overlay on the wall (all rounds)
+  'host:clear-reveal': {};
   // Setup / library editor
   'host:config-set-round-lineup': { round: RoundType; songIds: string[] };
   'host:config-set-al-group-song': { group: string; songId: string };
@@ -375,6 +383,12 @@ export interface ClientEvents {
   'host:wtw-reset': {};                              // reset round state, keep lineup
   'host:config-set-showdown-lineup': { songIds: string[] };
   'host:config-set-wtw-lineup': { songIds: string[] };
+  // Replace the list of songs tagged for a given starting instrument. Pass [] to clear.
+  'host:config-set-wtw-by-instrument': { instrument: 'Drums' | 'Bass' | 'Keys' | 'Guitar' | 'Vocals'; songIds: string[] };
+  // Set a round's prize ladder (5 values). Pass null to clear back to default.
+  'host:config-set-round-prizes': { round: '5to1' | 'music-auction' | 'song-in-5-parts' | 'song-showdown'; values: number[] | null };
+  // Set the Song Showdown toss-up fixed prize. Pass null to clear back to $1,000.
+  'host:config-set-tossup-prize': { value: number | null };
   // Edit one or more of the 3 Win-the-Wall cash gates. Only the keys included get updated.
   // Pass `null` for a value to reset that gate to the hard-coded default ($50k/$100k/$250k).
   'host:config-set-wtw-prizes': { gate3?: number | null; gate5?: number | null; gate6?: number | null };
@@ -474,13 +488,24 @@ export interface GameConfig {
   // 6-song elimination threshold and they pick the first real-round year. Clear this (empty
   // string) to skip toss-up and start the round on the year-picker as before.
   songShowdownTossUp?: string;
-  // Win the Wall: ordered song pool for the endgame. Up to 8 songs — round needs 6 to clear,
-  // alternates stand by in case of producer curveballs between takes.
+  // Win the Wall: ordered song pool for the endgame. Acts as fallback when the starting-
+  // instrument pool (winTheWallByInstrument) is empty or exhausted. Up to ~12 songs.
   winTheWallLineup?: string[];
+  // Win the Wall: songs tagged by which instrument they START WELL on (matching the snake
+  // cell the song opens from). Each snake cell owns an instrument (col 0=Drums … col 4=Vocals);
+  // when WTW needs the next song, it first tries songs tagged for the current cell's
+  // instrument before falling back to winTheWallLineup. Songs may appear in multiple columns.
+  winTheWallByInstrument?: Partial<Record<'Drums' | 'Bass' | 'Keys' | 'Guitar' | 'Vocals', string[]>>;
   // Win the Wall: per-gate cash values (songs 3, 5, 6). Overrides the hard-coded
   // $50k / $100k / $250k defaults. Missing keys fall through to the default.
   // All three are ADDITIVE on top of banked earnings from earlier rounds.
   winTheWallPrizes?: Partial<Record<3 | 5 | 6, number>>;
+  // Per-round prize ladders (5 values each, same shape as hardcoded defaults in songs.ts).
+  // Song Showdown: runtime still doubles for songs 4-6 on top of this base.
+  // Missing round key / wrong length → fall back to default.
+  roundPrizes?: Partial<Record<'5to1' | 'music-auction' | 'song-in-5-parts' | 'song-showdown', number[]>>;
+  // Song Showdown toss-up fixed prize (default $1,000). Free-for-all opener.
+  songShowdownTossUpPrize?: number;
   // Per-round "demo lineup" — a short (recommended 3-song) set used when the host toggles a
   // round into demo mode from /host or /setup. Demo rounds run exactly like the real thing but
   // score changes and eliminations are reverted at round end via a pre-round snapshot.

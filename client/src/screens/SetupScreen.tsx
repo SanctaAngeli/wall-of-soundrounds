@@ -611,6 +611,10 @@ export function SetupScreen() {
                 for (const id of defaultOrder) if (!order.includes(id) && order.length < 5) order.push(id);
                 const hasCustom = !!config.stemOrderBySong?.[selected.id];
                 const resetOrder = () => emit('host:config-set-stem-order', { songId: selected.id, stemIds: defaultOrder });
+                const saveOrder = () => {
+                  emit('host:config-set-stem-order', { songId: selected.id, stemIds: order.slice(0, 5) });
+                  flash(`Saved arrangement for ${selected.title}`);
+                };
                 const dropStem = (slotIdx: number, stemId: number) => {
                   if (!allStemById.has(stemId)) return; // song must actually have this stem
                   const curr = [...order];
@@ -630,11 +634,20 @@ export function SetupScreen() {
                       <div style={{ fontSize: '0.75rem', color: '#8b5cf6', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
                         Stem arrangement (Less is More · Song Showdown · Music Auction)
                       </div>
-                      {hasCustom && (
-                        <button onClick={resetOrder} style={{ ...S.btn, background: '#333', color: '#aaa', fontSize: '0.6rem', padding: '3px 8px' }}>
-                          Reset
+                      <div style={{ display: 'flex', gap: '4px' }}>
+                        <button
+                          onClick={saveOrder}
+                          style={{ ...S.btn, background: '#00ff88', color: '#000', fontSize: '0.65rem', padding: '4px 10px', fontWeight: 900 }}
+                          title="Save this arrangement for the current session"
+                        >
+                          ✓ SAVE
                         </button>
-                      )}
+                        {hasCustom && (
+                          <button onClick={resetOrder} style={{ ...S.btn, background: '#333', color: '#aaa', fontSize: '0.6rem', padding: '3px 8px' }}>
+                            Reset
+                          </button>
+                        )}
+                      </div>
                     </div>
                     <div style={{ fontSize: '0.65rem', color: '#8080a0', marginBottom: '8px', fontStyle: 'italic' }}>
                       Drag any stem (primary or extra) into a slot. Applies globally — every round this song plays in uses this arrangement.
@@ -794,17 +807,31 @@ export function SetupScreen() {
                   {ids.map((id, i) => {
                     const song = songById(id);
                     const isAlternate = round === '5to1' && i >= maxPlayed;
+                    const isSelected = selected?.id === id;
+                    const canEdit = !!song;
                     return (
-                      <div key={`${id}-${i}`} style={{ ...S.lineupItem, opacity: isAlternate ? 0.5 : 1 }}>
+                      <div
+                        key={`${id}-${i}`}
+                        onClick={canEdit ? () => loadSongForPreview(song!) : undefined}
+                        title={canEdit ? 'Click to edit this song (loads into the sampler on the left)' : undefined}
+                        style={{
+                          ...S.lineupItem,
+                          opacity: isAlternate ? 0.5 : 1,
+                          cursor: canEdit ? 'pointer' : 'default',
+                          border: isSelected ? '1px solid #8b5cf6' : '1px solid #333',
+                          background: isSelected ? '#8b5cf622' : '#1a1a3a',
+                        }}
+                      >
                         <span style={{ fontWeight: 800, color: isAlternate ? '#666' : '#ffd700', minWidth: '22px' }}>{i + 1}</span>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ color: '#fff', fontSize: '0.8rem', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                             {song?.title ?? id}
                             {isAlternate && <span style={{ color: '#8080a0', fontSize: '0.6rem', marginLeft: '6px' }}>(alternate)</span>}
+                            {isSelected && <span style={{ color: '#8b5cf6', fontSize: '0.6rem', marginLeft: '6px', fontWeight: 900 }}>✎ EDITING</span>}
                           </div>
                           <div style={{ color: '#8080a0', fontSize: '0.65rem' }}>{song?.artist ?? '(missing)'}</div>
                         </div>
-                        <div style={{ display: 'flex', gap: '2px' }}>
+                        <div style={{ display: 'flex', gap: '2px' }} onClick={e => e.stopPropagation()}>
                           <button onClick={() => moveInRound(round, i, -1)} disabled={i === 0} style={S.moveBtn}>▲</button>
                           <button onClick={() => moveInRound(round, i, 1)} disabled={i === ids.length - 1} style={S.moveBtn}>▼</button>
                           <button onClick={() => removeFromRound(round, i)} style={{ ...S.moveBtn, color: '#ff6666' }}>✕</button>
@@ -969,6 +996,143 @@ export function SetupScreen() {
             );
           })()}
 
+          {/* Per-round prize ladder editor (5to1 / music-auction / song-in-5-parts / song-showdown).
+              5 numeric inputs, host sets each tier. onBlur commits via host:config-set-round-prizes.
+              Clearing any input reverts ALL 5 to the round's defaults (matching WTW's clear behaviour).
+              Song Showdown gets an additional toss-up single-prize input. */}
+          {(activeRoundTab === '5to1' || activeRoundTab === 'music-auction' || activeRoundTab === 'song-in-5-parts' || activeRoundTab === 'song-showdown') && (() => {
+            const round = activeRoundTab;
+            const DEFAULTS: Record<typeof round, number[]> = {
+              '5to1': [3000, 4000, 5000, 6000, 10000],
+              'music-auction': [15000, 6000, 3000, 2000, 1000],
+              'song-in-5-parts': [1000, 2000, 3000, 4000, 5000],
+              'song-showdown': [2500, 2000, 1500, 1000, 500],
+            };
+            const TIER_LABELS: Record<typeof round, string[]> = {
+              '5to1': ['Song 1 (5 stems)', 'Song 2 (4 stems)', 'Song 3 (3 stems)', 'Song 4 (2 stems)', 'Song 5 (1 stem)'],
+              'music-auction': ['1 musician', '2 musicians', '3 musicians', '4 musicians', '5 musicians'],
+              'song-in-5-parts': ['Col 1 (Vocals)', 'Col 2 (Guitar)', 'Col 3 (Keys)', 'Col 4 (Bass)', 'Col 5 (Drums)'],
+              'song-showdown': ['Tier 1 (1 stem)', 'Tier 2 (2 stems)', 'Tier 3 (3 stems)', 'Tier 4 (4 stems)', 'Tier 5 (5 stems)'],
+            };
+            const SUBTITLE: Record<typeof round, string> = {
+              '5to1': 'Fewer stems = bigger prize. Song 5 is worth the most (hardest to guess with only 1 stem).',
+              'music-auction': 'More musicians = smaller prize. The player bidding for the FEWEST musicians wins the most cash.',
+              'song-in-5-parts': 'Prize increases left to right across the 5 columns. Total possible payout if all columns are won.',
+              'song-showdown': 'Ladder drops as each musician joins (slot 1 plays alone). Songs 4–6 are automatically doubled on top of these base values.',
+            };
+            const defaults = DEFAULTS[round];
+            const labels = TIER_LABELS[round];
+            const override = config.roundPrizes?.[round];
+            const effective = override && override.length === 5 ? override : defaults;
+            const hasOverride = !!override;
+            const roundColor = round === '5to1' ? '#8b5cf6'
+                             : round === 'music-auction' ? '#00d4ff'
+                             : round === 'song-in-5-parts' ? '#ff4488'
+                             : '#ff8c00'; // song-showdown
+            const resetAll = () => emit('host:config-set-round-prizes', { round, values: null });
+            const setTier = (idx: number, raw: string) => {
+              const trimmed = raw.trim();
+              if (!trimmed) { resetAll(); return; }
+              const n = Number(trimmed);
+              if (!Number.isFinite(n) || n < 0) return;
+              const next = [...effective];
+              next[idx] = Math.round(n);
+              emit('host:config-set-round-prizes', { round, values: next });
+            };
+            // Song Showdown also has the toss-up fixed prize.
+            const tossUpOverride = config.songShowdownTossUpPrize;
+            const tossUpDefault = 1000;
+            const tossUpEffective = typeof tossUpOverride === 'number' ? tossUpOverride : tossUpDefault;
+            return (
+              <div style={{ marginTop: '14px', padding: '12px', background: '#0a0a1a', border: `1px solid ${roundColor}44`, borderRadius: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: '6px' }}>
+                  <div style={{ fontSize: '0.72rem', color: roundColor, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                    Prize ladder (host-configurable)
+                  </div>
+                  {hasOverride && (
+                    <button
+                      onClick={resetAll}
+                      style={{ ...S.btn, background: '#333', color: '#aaa', fontSize: '0.6rem', padding: '3px 8px' }}
+                      title="Revert all 5 tiers to defaults"
+                    >
+                      Reset all
+                    </button>
+                  )}
+                </div>
+                <div style={{ fontSize: '0.65rem', color: '#8080a0', marginBottom: '10px', fontStyle: 'italic' }}>
+                  {SUBTITLE[round]}
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {effective.map((v, i) => {
+                    const isCustom = hasOverride && v !== defaults[i];
+                    return (
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#a0a0b0', minWidth: '160px' }}>
+                          {labels[i]}
+                        </span>
+                        <span style={{ color: '#8080a0', fontWeight: 700 }}>$</span>
+                        <input
+                          type="number"
+                          min={0}
+                          step={500}
+                          defaultValue={v}
+                          key={`${round}-tier-${i}-${v}`}
+                          onBlur={e => setTier(i, e.target.value)}
+                          style={{
+                            flex: 1, padding: '6px 8px',
+                            background: isCustom ? `${roundColor}15` : '#1a1a3a',
+                            border: `1px solid ${isCustom ? `${roundColor}88` : '#333'}`,
+                            borderRadius: '4px', color: '#fff', fontSize: '0.85rem',
+                            fontFamily: 'monospace', fontWeight: 700,
+                          }}
+                        />
+                        <span style={{ fontSize: '0.6rem', color: '#606080', minWidth: '72px' }}>
+                          default: ${defaults[i].toLocaleString()}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+                {round === 'song-showdown' && (
+                  <div style={{ marginTop: '12px', paddingTop: '10px', borderTop: `1px dashed ${roundColor}44` }}>
+                    <div style={{ fontSize: '0.65rem', color: roundColor, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '6px' }}>
+                      Toss Up fixed prize
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#a0a0b0', minWidth: '160px' }}>
+                        Toss Up opener
+                      </span>
+                      <span style={{ color: '#8080a0', fontWeight: 700 }}>$</span>
+                      <input
+                        type="number"
+                        min={0}
+                        step={500}
+                        defaultValue={tossUpEffective}
+                        key={`tossup-${tossUpEffective}`}
+                        onBlur={e => {
+                          const raw = e.target.value.trim();
+                          if (!raw) { emit('host:config-set-tossup-prize', { value: null }); return; }
+                          const n = Number(raw);
+                          if (Number.isFinite(n) && n >= 0) emit('host:config-set-tossup-prize', { value: Math.round(n) });
+                        }}
+                        style={{
+                          flex: 1, padding: '6px 8px',
+                          background: tossUpOverride != null ? `${roundColor}15` : '#1a1a3a',
+                          border: `1px solid ${tossUpOverride != null ? `${roundColor}88` : '#333'}`,
+                          borderRadius: '4px', color: '#fff', fontSize: '0.85rem',
+                          fontFamily: 'monospace', fontWeight: 700,
+                        }}
+                      />
+                      <span style={{ fontSize: '0.6rem', color: '#606080', minWidth: '72px' }}>
+                        default: $1,000
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
           {/* Win the Wall: per-gate cash configuration.
               3 paying tiers (songs 3, 5, 6). Each has a default; host can override per-show.
               Clearing the input reverts that tier to the default value. All values are ADDITIVE
@@ -1035,6 +1199,109 @@ export function SetupScreen() {
                             RESET
                           </button>
                         )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Win the Wall: 5-column starting-instrument editor.
+              For each snake cell, the runtime picks the next song from the column matching
+              the cell's instrument (col 0=Drums ... col 4=Vocals) before falling back to the
+              main lineup. A song can be tagged for multiple instruments. Empty columns just
+              mean "no preference — use the main lineup". */}
+          {activeRoundTab === 'win-the-wall' && (() => {
+            const INSTRUMENTS: { name: 'Drums' | 'Bass' | 'Keys' | 'Guitar' | 'Vocals'; icon: string; color: string }[] = [
+              { name: 'Drums',  icon: '🥁', color: '#ff4444' },
+              { name: 'Bass',   icon: '🎸', color: '#ff8800' },
+              { name: 'Keys',   icon: '🎹', color: '#ffd700' },
+              { name: 'Guitar', icon: '🎸', color: '#44ff88' },
+              { name: 'Vocals', icon: '🎤', color: '#00d4ff' },
+            ];
+            const byInstrument = config.winTheWallByInstrument ?? {};
+            return (
+              <div style={{ marginTop: '14px', padding: '12px', background: '#0a0a1a', border: '1px solid #8b5cf644', borderRadius: '8px' }}>
+                <div style={{ fontSize: '0.72rem', color: '#8b5cf6', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '6px' }}>
+                  Starting-instrument pools
+                </div>
+                <div style={{ fontSize: '0.65rem', color: '#8080a0', marginBottom: '10px', fontStyle: 'italic' }}>
+                  Tag each song with the instrument(s) it opens well on. When WTW needs the next song mid-round, it picks from the column matching the current snake cell (e.g. cell 2 = Keys → picks first unused song from the Keys column). A song can go in multiple columns. Empty columns fall back to the main lineup above.
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '6px' }}>
+                  {INSTRUMENTS.map(inst => {
+                    const songIds = byInstrument[inst.name] ?? [];
+                    const dropId = `wtw-inst-${inst.name}`;
+                    const isHot = dragOverRound === dropId;
+                    const removeSong = (id: string) => emit('host:config-set-wtw-by-instrument', {
+                      instrument: inst.name,
+                      songIds: songIds.filter(x => x !== id),
+                    });
+                    return (
+                      <div
+                        key={inst.name}
+                        onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setDragOverRound(dropId); }}
+                        onDragLeave={() => setDragOverRound(null)}
+                        onDrop={e => {
+                          e.preventDefault();
+                          setDragOverRound(null);
+                          const songId = e.dataTransfer.getData('application/x-wos-song');
+                          if (!songId) return;
+                          if (songIds.includes(songId)) return;   // already tagged for this instrument
+                          emit('host:config-set-wtw-by-instrument', {
+                            instrument: inst.name,
+                            songIds: [...songIds, songId],
+                          });
+                        }}
+                        style={{
+                          padding: '6px', minHeight: '180px',
+                          background: isHot ? `${inst.color}20` : '#1a1a3a',
+                          border: isHot ? `2px dashed ${inst.color}` : `1px dashed ${inst.color}55`,
+                          borderRadius: '6px',
+                          display: 'flex', flexDirection: 'column', gap: '4px',
+                        }}
+                      >
+                        <div style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          gap: '4px', padding: '4px 0 6px 0',
+                          borderBottom: `1px solid ${inst.color}33`,
+                          fontSize: '0.65rem', fontWeight: 900, letterSpacing: '0.1em',
+                          color: inst.color, textTransform: 'uppercase',
+                        }}>
+                          <span>{inst.icon}</span>
+                          <span>{inst.name}</span>
+                        </div>
+                        {songIds.length === 0 && (
+                          <div style={{
+                            fontSize: '0.6rem', color: '#606080', fontStyle: 'italic',
+                            textAlign: 'center', padding: '10px 4px',
+                          }}>
+                            drop songs here
+                          </div>
+                        )}
+                        {songIds.map(id => {
+                          const song = songById(id);
+                          return (
+                            <div key={id} style={{
+                              display: 'flex', alignItems: 'center', gap: '4px',
+                              padding: '4px 6px', background: `${inst.color}15`,
+                              border: `1px solid ${inst.color}44`, borderRadius: '4px',
+                              fontSize: '0.65rem',
+                            }}>
+                              <span style={{ flex: 1, color: '#fff', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                {song?.title ?? id}
+                              </span>
+                              <button
+                                onClick={() => removeSong(id)}
+                                style={{ background: 'none', border: 'none', color: '#ff6666', cursor: 'pointer', padding: 0, fontSize: '0.85rem', lineHeight: 1 }}
+                                title="Remove from this instrument's pool"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          );
+                        })}
                       </div>
                     );
                   })}

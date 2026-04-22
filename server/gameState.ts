@@ -122,6 +122,10 @@ export interface GameState {
   // song" (semi-opacity gold); cells after are upcoming. Reset on every song change.
   wtwSongStartIndex: number;
 
+  // Song IDs already played in this WTW run — prevents the same song being picked twice
+  // when auto-advancing through the instrument-tagged pool. Reset at round start.
+  wtwUsedSongIds: string[];
+
   // Host-triggered scoreboard overlay. Orthogonal to game phase — setting this true at any time
   // displays a big "Player 1: $X, Player 2: $X, Player 3: $X" overlay on the wall. Audio and
   // round state continue underneath. Dismissed with another host click.
@@ -209,6 +213,7 @@ export function createInitialState(): GameState {
     wtwWalkawayOffered: null,
     wtwStartingScore: 0,
     wtwSongStartIndex: 0,
+    wtwUsedSongIds: [],
     showScoresOverlay: false,
     demoMode: false,
     demoSnapshot: null,
@@ -311,6 +316,13 @@ export function setWtwLineup(state: GameState, songIds: string[]): void {
   state.config.winTheWallLineup = songIds;
 }
 
+// Replace the list of songs tagged for a given starting instrument. Empty array clears.
+// Songs can appear in multiple columns — no de-dup enforcement on input.
+export function setWtwByInstrument(state: GameState, instrument: 'Drums' | 'Bass' | 'Keys' | 'Guitar' | 'Vocals', songIds: string[]): void {
+  if (!state.config.winTheWallByInstrument) state.config.winTheWallByInstrument = {};
+  state.config.winTheWallByInstrument[instrument] = [...songIds];
+}
+
 // Set one or more WTW gate prizes. `null` clears a gate back to the default. Missing keys
 // leave the existing override untouched.
 export function setWtwPrizes(state: GameState, updates: { gate3?: number | null; gate5?: number | null; gate6?: number | null }): void {
@@ -332,6 +344,43 @@ export function resolveSongYear(state: GameState, song: Song): number {
   return state.config.songYearOverrides?.[song.id] ?? song.year;
 }
 
+type PrizeRound = '5to1' | 'music-auction' | 'song-in-5-parts' | 'song-showdown';
+
+// Resolve a round's prize ladder — config override beats the hardcoded default.
+// Override must match default length and all values must be finite non-negative numbers.
+export function resolveRoundPrizes(state: GameState, round: PrizeRound): number[] {
+  const fallback = roundPrizes[round];
+  const override = state.config.roundPrizes?.[round];
+  if (!override || override.length !== fallback.length) return fallback;
+  if (!override.every(v => Number.isFinite(v) && v >= 0)) return fallback;
+  return override.map(v => Math.round(v));
+}
+
+// Resolve the Song Showdown toss-up fixed prize. Default $1,000.
+export function resolveTossUpPrize(state: GameState): number {
+  const v = state.config.songShowdownTossUpPrize;
+  if (typeof v === 'number' && Number.isFinite(v) && v >= 0) return Math.round(v);
+  return 1000;
+}
+
+export function setRoundPrizes(state: GameState, round: PrizeRound, values: number[] | null): void {
+  if (!state.config.roundPrizes) state.config.roundPrizes = {};
+  if (values === null) {
+    delete state.config.roundPrizes[round];
+    return;
+  }
+  const fallback = roundPrizes[round];
+  if (values.length !== fallback.length) return;
+  if (!values.every(v => Number.isFinite(v) && v >= 0)) return;
+  state.config.roundPrizes[round] = values.map(v => Math.round(v));
+}
+
+export function setTossUpPrize(state: GameState, value: number | null): void {
+  if (value === null) { state.config.songShowdownTossUpPrize = undefined; return; }
+  if (!Number.isFinite(value) || value < 0) return;
+  state.config.songShowdownTossUpPrize = Math.round(value);
+}
+
 export function resetConfig(state: GameState): void {
   state.config = {
     roundLineups: {},
@@ -344,6 +393,9 @@ export function resetConfig(state: GameState): void {
     songShowdownTossUp: 'murder-on-the-dance-floor',
     winTheWallLineup: [],
     winTheWallPrizes: {},
+    winTheWallByInstrument: {},
+    roundPrizes: {},
+    songShowdownTossUpPrize: undefined,
     demoLineup: {},
   };
 }
@@ -363,6 +415,9 @@ export function importConfig(state: GameState, config: GameConfig): void {
     songShowdownTossUp: config.songShowdownTossUp ?? '',
     winTheWallLineup: config.winTheWallLineup ?? [],
     winTheWallPrizes: config.winTheWallPrizes ?? {},
+    winTheWallByInstrument: config.winTheWallByInstrument ?? {},
+    roundPrizes: config.roundPrizes ?? {},
+    songShowdownTossUpPrize: config.songShowdownTossUpPrize,
     demoLineup: config.demoLineup ?? {},
   };
 }
@@ -498,7 +553,10 @@ function generateWtwWallMusicians(state: GameState): WallMusician[] {
   };
 
   const isGoldPhase = state.phase === 'wtw-gold';
-  const isPlayingPhase = state.phase === 'wtw-playing';
+  // "Playing" for the wall renderer also covers wtw-song-won (between-gate celebration) and
+  // wtw-walkaway-offer — we want the just-won song's cells to stay fully lit gold during
+  // those pauses, not revert to dim silhouettes.
+  const isPlayingPhase = state.phase === 'wtw-playing' || state.phase === 'wtw-song-won' || state.phase === 'wtw-walkaway-offer';
 
   for (let row = 0; row < 3; row++) {
     for (let col = 0; col < 5; col++) {
@@ -720,6 +778,14 @@ export function deriveWallState(state: GameState): WallState {
     revealText: state.revealText || undefined,
     message: state.message,
     auctionHighlight: state.auctionHighlight,
+    auctionOffersLadder: isAuction ? state.auctionOffers.map(o => ({
+      musicianCount: o.musicianCount,
+      prize: o.prize,
+      instrument: o.instrument,
+      icon: o.icon,
+      color: o.color,
+    })) : undefined,
+    auctionCurrentOffer: isAuction ? state.auctionCurrentOffer : undefined,
     auctionBids: isAuction && auctionRevealed ? state.auctionBids : undefined,
     auctionWinner: isAuction && auctionRevealed ? state.auctionWinner : undefined,
     auctionTimer: isAuction ? state.auctionTimerValue : undefined,
@@ -1127,7 +1193,7 @@ export function selectRound(state: GameState, round: RoundType, opts: { demo?: b
         state.showdownStemJoinOrder = resolveShowdownStemOrder(state, tossUpSong);
         state.showdownTier = 0;
         state.activeStems = state.showdownStemJoinOrder.slice(0, 1);
-        state.currentPrize = 1000;       // fixed, no ladder
+        state.currentPrize = resolveTossUpPrize(state);  // fixed, no ladder (host-configurable)
         state.phase = 'showdown-toss-up';
       } else {
         state.showdownTossUpResolved = true;   // no toss-up to play
@@ -1148,6 +1214,7 @@ export function selectRound(state: GameState, round: RoundType, opts: { demo?: b
     state.wtwSongIndex = 0;
     state.wtwSongsWon = 0;
     state.wtwMusiciansThisSong = 0;
+    state.wtwUsedSongIds = [];
     state.wtwSurvivor = pickWtwSurvivor(state);
     // Snapshot the survivor's banked total so bust messaging can show "walk with $X".
     state.wtwStartingScore = state.wtwSurvivor ? state.players[state.wtwSurvivor].score : 0;
@@ -1233,7 +1300,7 @@ export function loadSong(state: GameState, index: number): void {
     case '5to1': {
       // "Less is More" progression: song 1 plays 5 stems simultaneously ($3k), song 5
       // plays just 1 ($10k). Fewer instruments = harder to recognise = more money.
-      state.currentPrize = roundPrizes['5to1'][index] || 3000;
+      state.currentPrize = resolveRoundPrizes(state, '5to1')[index] || 3000;
       const instrumentCount = Math.max(1, 5 - index);
       if (state.currentSong) {
         // Honour host's per-song stem-order arrangement. Look up stems across primary AND
@@ -1332,6 +1399,11 @@ export function revealSong(state: GameState): void {
   const override = state.config.musicAuctionOverrides?.[state.currentSong.id];
   const title = (state.roundType === 'music-auction' && override?.title) || state.currentSong.title;
   state.revealText = `${title} — ${state.currentSong.artist}`;
+}
+
+// Dismiss any song-reveal overlay on the wall. Safe to call regardless of round/phase.
+export function clearReveal(state: GameState): void {
+  state.revealText = '';
 }
 
 export function revealAll(state: GameState): number[] {
@@ -1637,8 +1709,9 @@ function setupAuctionOffers(state: GameState): void {
   if (!state.currentSong) return;
   const song = state.currentSong;
 
-  // Musician count -> prize ladder. 1 musician = $15k, 2 = $6k, 3 = $3k, 4 = $2k, 5 = $1k.
-  const prizeLadder = [15000, 6000, 3000, 2000, 1000];
+  // Musician count -> prize ladder. Default 1 musician = $15k, 2 = $6k, 3 = $3k, 4 = $2k, 5 = $1k.
+  // Host can override the 5 values via /setup → Music Auction → Prize ladder.
+  const prizeLadder = resolveRoundPrizes(state, 'music-auction');
 
   // Full available stem pool (skip "clue" — it's a lyric hint, not a musician).
   const primaryStems = song.stems;
@@ -2068,8 +2141,9 @@ export function partsMarkCorrect(state: GameState): { columnWon: number; nextCol
   const slot = state.partsScatter.find(s => s.col === col && s.row === row);
   const songIndex = slot?.songIndex ?? 0;
   state.partsColumnWinners[col] = { player: buzzer, songIndex };
-  state.players[buzzer].score += roundPrizes['song-in-5-parts'][col] ?? 1000;
-  state.currentPrize = roundPrizes['song-in-5-parts'][col] ?? 1000;
+  const partsLadder = resolveRoundPrizes(state, 'song-in-5-parts');
+  state.players[buzzer].score += partsLadder[col] ?? 1000;
+  state.currentPrize = partsLadder[col] ?? 1000;
   state.visualEffect = 'correct';
   state.message = `CORRECT! +${formatMoney(state.currentPrize)}`;
   state.buzzedPlayer = null;
@@ -2148,9 +2222,10 @@ function pickRandomActivePlayer(state: GameState): PlayerId {
   return active[Math.floor(Math.random() * active.length)];
 }
 
-// 5-entry base ladder doubled for the back half (songs 4-6)
+// 5-entry base ladder doubled for the back half (songs 4-6).
+// Host can override the base via /setup → Song Showdown → Prize ladder.
 export function showdownLadder(state: GameState): number[] {
-  const base = roundPrizes['song-showdown'];
+  const base = resolveRoundPrizes(state, 'song-showdown');
   const multiplier = state.showdownSongsPlayed >= 3 ? 2 : 1;
   return base.map(v => v * multiplier);
 }
@@ -2262,12 +2337,13 @@ export function showdownMarkCorrect(state: GameState): void {
   // for "currently in toss-up" is resolved=false AND no main songs played yet.
   const inTossUp = !state.showdownTossUpResolved && state.showdownSongsPlayed === 0;
   if (inTossUp) {
-    state.players[buzzer].score += 1000;
+    const tossUpPrize = resolveTossUpPrize(state);
+    state.players[buzzer].score += tossUpPrize;
     state.showdownControllerPlayer = buzzer;
     state.showdownTossUpResolved = true;
     state.phase = 'result';
     state.visualEffect = 'correct';
-    state.message = `TOSS UP! ${state.players[buzzer].name} banks ${formatMoney(1000)}`;
+    state.message = `TOSS UP! ${state.players[buzzer].name} banks ${formatMoney(tossUpPrize)}`;
     state.isAudioPlaying = false;
     return;
   }
@@ -2452,19 +2528,73 @@ export function wtwClearTimer(state: GameState): void {
   }
 }
 
+// WTW snake cells map col → instrument (col 0 = Drums, col 4 = Vocals) matching the default
+// wall column order. Used to layer audio stems so the song "starts on" whichever instrument
+// owns the current snake cell (e.g. cell 2 = Keys → new song opens with Keys, not Drums).
+const WTW_COL_INSTRUMENTS = ['Drums', 'Bass', 'Keys', 'Guitar', 'Vocals'] as const;
+export type WtwInstrument = typeof WTW_COL_INSTRUMENTS[number];
+
+export function wtwCellInstrument(cellIdx: number): WtwInstrument | null {
+  if (cellIdx < 0 || cellIdx >= WTW_SNAKE.length) return null;
+  const [, col] = WTW_SNAKE[cellIdx];
+  return WTW_COL_INSTRUMENTS[col] ?? null;
+}
+
+// Find the song's stem that plays the given instrument (case-insensitive).
+// Falls back to song.stems[0] if the song doesn't carry that instrument (defensive — all WOS
+// library songs have all 5 primary stems, but older legacy entries might be short).
+function wtwStemIdForCell(song: Song | null, cellIdx: number): number | null {
+  if (!song || song.stems.length === 0) return null;
+  const instrument = wtwCellInstrument(cellIdx);
+  if (!instrument) return song.stems[0]?.id ?? null;
+  const match = song.stems.find(s => s.instrument.toLowerCase() === instrument.toLowerCase());
+  return (match ?? song.stems[0]).id ?? null;
+}
+
+// Pick the next song for the current snake cell. Prefers songs tagged for the cell's
+// starting instrument via config.winTheWallByInstrument; falls back to the next unused
+// song in wtwLineup. Returns { song, lineupIndex } — lineupIndex is the position of the
+// chosen song in wtwLineup (or the current index if not found in the lineup).
+function wtwPickNextSong(state: GameState): { song: Song | null; lineupIndex: number } {
+  const used = new Set(state.wtwUsedSongIds);
+  const instrument = wtwCellInstrument(state.wtwMusicianIndex);
+  // Try the instrument-tagged pool first
+  if (instrument) {
+    const tagged = state.config.winTheWallByInstrument?.[instrument] ?? [];
+    for (const id of tagged) {
+      if (used.has(id)) continue;
+      const song = getSongById(id);
+      if (!song) continue;
+      const idxInLineup = state.wtwLineup.findIndex(s => s.id === id);
+      return { song, lineupIndex: idxInLineup >= 0 ? idxInLineup : state.wtwSongIndex };
+    }
+  }
+  // Fallback: next unused song in the ordered lineup
+  for (let i = 0; i < state.wtwLineup.length; i++) {
+    const song = state.wtwLineup[i];
+    if (!used.has(song.id)) return { song, lineupIndex: i };
+  }
+  return { song: null, lineupIndex: state.wtwSongIndex };
+}
+
 // Start the next song's snake run. Resets per-song counters and loads the song audio.
 // Called on round start and after every correct/skip.
 export function wtwStartSong(state: GameState): { song: Song | null; firstCellIndex: number; firstStemId: number | null } {
   if (state.roundType !== 'win-the-wall') return { song: null, firstCellIndex: -1, firstStemId: null };
   wtwClearTimer(state);
 
-  const songIdx = state.wtwSongIndex;
-  const song = state.wtwLineup[songIdx] ?? null;
+  // First musician = next in the snake past the spent ones. musicianIndex is global (0-14).
+  if (state.wtwMusicianIndex < 0) state.wtwMusicianIndex = 0;
+
+  // First song of the round: respect the configured starting-instrument pool if it has
+  // a match for cell 0's instrument, otherwise use the ordered lineup head.
+  const firstPick = wtwPickNextSong(state);
+  const song = firstPick.song ?? state.wtwLineup[state.wtwSongIndex] ?? null;
+  if (firstPick.song) state.wtwSongIndex = firstPick.lineupIndex;
+  if (song && !state.wtwUsedSongIds.includes(song.id)) state.wtwUsedSongIds.push(song.id);
   state.currentSong = song;
   state.wtwMusiciansThisSong = 1;   // first musician is immediately "playing" at song start
 
-  // First musician = next in the snake past the spent ones. musicianIndex is global (0-14).
-  if (state.wtwMusicianIndex < 0) state.wtwMusicianIndex = 0;
   // Mark where this song starts in the snake — cells before this are "prior-song spent".
   state.wtwSongStartIndex = state.wtwMusicianIndex;
 
@@ -2480,9 +2610,11 @@ export function wtwStartSong(state: GameState): { song: Song | null; firstCellIn
     return { song: null, firstCellIndex: -1, firstStemId: null };
   }
 
-  // Cumulative-reveal pattern (matches R1): first musician plays the first stem only.
-  // Subsequent musicians add their stem on top (wtwAdvanceMusician appends).
-  const firstStemId = song && song.stems.length > 0 ? song.stems[0].id : null;
+  // Cumulative-reveal pattern (matches R1): first musician plays only the stem for the
+  // CURRENT snake cell's instrument. Subsequent musicians add the next cell's stem on top.
+  // Songs are expected to be curated so the starting instrument (first cell when loaded)
+  // fits musically — producer tags songs per starting instrument via /setup.
+  const firstStemId = wtwStemIdForCell(song, state.wtwMusicianIndex);
   state.activeStems = firstStemId != null ? [firstStemId] : [];
   state.isAudioPlaying = true;
   state.phase = 'wtw-playing';
@@ -2501,10 +2633,10 @@ export function wtwStartSong(state: GameState): { song: Song | null; firstCellIn
 function wtwNextStemToAdd(state: GameState): number | null {
   const song = state.currentSong;
   if (!song) return null;
-  // Musician 1 of the song = stem[0], musician 2 = stem[1], etc. Cap at song.stems.length.
-  const stemIdx = state.wtwMusiciansThisSong - 1;
-  if (stemIdx < 0 || stemIdx >= song.stems.length) return null;
-  return song.stems[stemIdx]?.id ?? null;
+  // Layer the stem whose instrument owns the current snake cell (cell-driven, not position
+  // in song.stems). Repeats within a song (e.g. snake revisits a Drums cell) are deduped by
+  // the caller since activeStems is cumulative — no double-fade-in of the same stem.
+  return wtwStemIdForCell(song, state.wtwMusicianIndex);
 }
 
 // Snake tick: advance to the next musician. Cumulative reveal — the new stem joins the ones
@@ -2572,7 +2704,11 @@ export function wtwMarkCorrect(state: GameState): { newSongsWon: number; atGate:
     return { newSongsWon: state.wtwSongsWon, atGate: true, jackpot: false };
   }
 
-  // Between-gate song (songs 1, 2, 4) — brief celebration then immediately advance
+  // Between-gate song (songs 1, 2, 4) — full-mix celebration, phase moves to 'wtw-song-won'
+  // so the host's "Next Song" button knows to advance the snake by one cell (rather than
+  // interpreting the press as an abandon-mid-song, which left the new song starting on the
+  // just-guessed cell — the glitch we fixed on 2026-04-22).
+  state.phase = 'wtw-song-won';
   state.message = `Song ${state.wtwSongsWon}/6 correct`;
   state.isAudioPlaying = true;
   if (state.currentSong) state.activeStems = state.currentSong.stems.map(s => s.id);
@@ -2616,8 +2752,13 @@ export function wtwJumpToSong(state: GameState, lineupIndex: number): { song: So
     return { song: null, bust: true };
   }
 
+  // Track the song we were JUST on as used before the jump.
+  if (state.currentSong && !state.wtwUsedSongIds.includes(state.currentSong.id)) {
+    state.wtwUsedSongIds.push(state.currentSong.id);
+  }
   state.wtwSongIndex = lineupIndex;
   const song = state.wtwLineup[lineupIndex] ?? null;
+  if (song && !state.wtwUsedSongIds.includes(song.id)) state.wtwUsedSongIds.push(song.id);
   state.currentSong = song;
   state.phase = 'wtw-playing';
   // New song takes over at the CURRENT cell — this becomes its stem 0. Prior cells (before
@@ -2625,7 +2766,8 @@ export function wtwJumpToSong(state: GameState, lineupIndex: number): { song: So
   // this jump point become "prior-song spent" once songStartIndex moves.
   state.wtwSongStartIndex = state.wtwMusicianIndex;
   state.wtwMusiciansThisSong = 1;
-  state.activeStems = song && song.stems.length > 0 ? [song.stems[0].id] : [];
+  const jumpFirstStem = wtwStemIdForCell(song, state.wtwMusicianIndex);
+  state.activeStems = jumpFirstStem != null ? [jumpFirstStem] : [];
   state.isAudioPlaying = true;
   state.buzzedPlayer = null;
   state.visualEffect = 'none';
@@ -2656,10 +2798,17 @@ export function wtwReorderLineup(state: GameState, newOrder: string[]): void {
 
 // Internal skip. 'auto' is called when a song burns its 5-musician cap — the cap cells are
 // spent (advance musicianIndex past them). 'manual' is the host button — does NOT burn extras;
-// new song takes over at the current cell.
+// new song takes over at the current cell. EXCEPTION: if the previous song was just won
+// (phase === 'wtw-song-won'), we advance musicianIndex by 1 so the new song starts on the
+// cell AFTER the one where the correct buzz happened.
 function wtwSkipSongInternal(state: GameState, cause: 'auto' | 'manual'): { stemId: null; autoSkipped: true; bust: boolean } {
+  const advanceForWonSong = cause === 'manual' && state.phase === 'wtw-song-won';
+  if (advanceForWonSong) state.wtwMusicianIndex += 1;
   wtwClearTimer(state);
-  state.wtwSongIndex += 1;
+  // Mark the just-finished song as used (so the next pick doesn't repeat it).
+  if (state.currentSong && !state.wtwUsedSongIds.includes(state.currentSong.id)) {
+    state.wtwUsedSongIds.push(state.currentSong.id);
+  }
   state.activeStems = [];
   state.isAudioPlaying = false;
   state.buzzedPlayer = null;
@@ -2667,22 +2816,6 @@ function wtwSkipSongInternal(state: GameState, cause: 'auto' | 'manual'): { stem
   state.message = cause === 'auto'
     ? `5 musicians used — moving on`
     : `Moving to next song`;
-
-  // Bust check — no songs left in the lineup?
-  if (state.wtwSongIndex >= state.wtwLineup.length) {
-    state.phase = 'wtw-bust';
-    state.currentSong = null;
-    state.message = `Out of songs — walk with ${formatMoney(state.wtwStartingScore)}`;
-    return { stemId: null, autoSkipped: true, bust: true };
-  }
-
-  // Auto-skip already consumed the cap's final cell in wtwAdvanceMusician (it bumped index).
-  // Manual skip leaves musicianIndex where it is — the new song takes over AT the current cell
-  // as its stem 0.
-  if (cause === 'auto') {
-    // No extra advance — wtwAdvanceMusician already moved us to the cell where we'd continue.
-    // Nothing to do here.
-  }
 
   // Bust check — snake exhausted?
   if (state.wtwMusicianIndex >= WTW_SNAKE.length) {
@@ -2692,12 +2825,22 @@ function wtwSkipSongInternal(state: GameState, cause: 'auto' | 'manual'): { stem
     return { stemId: null, autoSkipped: true, bust: true };
   }
 
-  const nextSong = state.wtwLineup[state.wtwSongIndex] ?? null;
+  // Pick the next song: prefer starting-instrument pool, fall back to ordered lineup.
+  const pick = wtwPickNextSong(state);
+  if (!pick.song) {
+    state.phase = 'wtw-bust';
+    state.currentSong = null;
+    state.message = `Out of songs — walk with ${formatMoney(state.wtwStartingScore)}`;
+    return { stemId: null, autoSkipped: true, bust: true };
+  }
+  const nextSong = pick.song;
+  state.wtwSongIndex = pick.lineupIndex;
   state.currentSong = nextSong;
   state.phase = 'wtw-playing';
   state.wtwSongStartIndex = state.wtwMusicianIndex;   // new song starts "here"
   state.wtwMusiciansThisSong = 1;
-  state.activeStems = nextSong && nextSong.stems.length > 0 ? [nextSong.stems[0].id] : [];
+  const skipFirstStem = wtwStemIdForCell(nextSong, state.wtwMusicianIndex);
+  state.activeStems = skipFirstStem != null ? [skipFirstStem] : [];
   state.isAudioPlaying = true;
   return { stemId: null, autoSkipped: true, bust: false };
 }
@@ -2718,12 +2861,25 @@ export function wtwAcceptWalkaway(state: GameState): void {
 // Walkaway decline: keep going — advance to next song (same snake position, no payout yet).
 export function wtwDeclineWalkaway(state: GameState): void {
   if (state.roundType !== 'win-the-wall' || state.phase !== 'wtw-walkaway-offer') return;
+  // Mark the just-won song as used so the picker doesn't repeat it.
+  if (state.currentSong && !state.wtwUsedSongIds.includes(state.currentSong.id)) {
+    state.wtwUsedSongIds.push(state.currentSong.id);
+  }
   state.wtwWalkawayOffered = null;
-  state.wtwSongIndex += 1;
   state.wtwMusicianIndex += 1;           // next musician = next snake position
   state.wtwMusiciansThisSong = 0;
 
-  if (state.wtwSongIndex >= state.wtwLineup.length || state.wtwMusicianIndex >= WTW_SNAKE.length) {
+  if (state.wtwMusicianIndex >= WTW_SNAKE.length) {
+    state.phase = 'wtw-bust';
+    state.currentSong = null;
+    state.activeStems = [];
+    state.isAudioPlaying = false;
+    state.message = `Out of musicians — walk with ${formatMoney(state.wtwStartingScore)}`;
+    return;
+  }
+
+  const pick = wtwPickNextSong(state);
+  if (!pick.song) {
     state.phase = 'wtw-bust';
     state.currentSong = null;
     state.activeStems = [];
@@ -2731,13 +2887,14 @@ export function wtwDeclineWalkaway(state: GameState): void {
     state.message = `Out of songs — walk with ${formatMoney(state.wtwStartingScore)}`;
     return;
   }
-
-  const song = state.wtwLineup[state.wtwSongIndex] ?? null;
+  const song = pick.song;
+  state.wtwSongIndex = pick.lineupIndex;
   state.currentSong = song;
   state.phase = 'wtw-playing';
   state.wtwSongStartIndex = state.wtwMusicianIndex;   // new song starts here
   state.wtwMusiciansThisSong = 1;
-  state.activeStems = song && song.stems.length > 0 ? [song.stems[0].id] : [];
+  const declineFirstStem = wtwStemIdForCell(song, state.wtwMusicianIndex);
+  state.activeStems = declineFirstStem != null ? [declineFirstStem] : [];
   state.isAudioPlaying = true;
   state.buzzedPlayer = null;
   state.visualEffect = 'none';

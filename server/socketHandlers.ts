@@ -12,6 +12,7 @@ import {
   setStem,
   revealAll,
   revealSong,
+  clearReveal,
   playerBuzz,
   markCorrect,
   markWrong,
@@ -47,6 +48,9 @@ import {
   showdownSkipTossUp,
   setWtwLineup,
   setWtwPrizes,
+  setWtwByInstrument,
+  setRoundPrizes,
+  setTossUpPrize,
   setPlayerEliminated,
   setScore,
   setScoresOverlay,
@@ -312,6 +316,11 @@ export function setupSocketHandlers(io: Server, state: GameState) {
       broadcastState(io, state);
     });
 
+    socket.on('host:clear-reveal', () => {
+      clearReveal(state);
+      broadcastState(io, state);
+    });
+
     // ============================================
     // SETUP / CONFIG EVENTS
     // ============================================
@@ -358,6 +367,21 @@ export function setupSocketHandlers(io: Server, state: GameState) {
 
     socket.on('host:config-set-wtw-prizes', (data: { gate3?: number | null; gate5?: number | null; gate6?: number | null }) => {
       setWtwPrizes(state, data);
+      broadcastState(io, state);
+    });
+
+    socket.on('host:config-set-wtw-by-instrument', (data: { instrument: 'Drums' | 'Bass' | 'Keys' | 'Guitar' | 'Vocals'; songIds: string[] }) => {
+      setWtwByInstrument(state, data.instrument, data.songIds);
+      broadcastState(io, state);
+    });
+
+    socket.on('host:config-set-round-prizes', (data: { round: '5to1' | 'music-auction' | 'song-in-5-parts' | 'song-showdown'; values: number[] | null }) => {
+      setRoundPrizes(state, data.round, data.values);
+      broadcastState(io, state);
+    });
+
+    socket.on('host:config-set-tossup-prize', (data: { value: number | null }) => {
+      setTossUpPrize(state, data.value);
       broadcastState(io, state);
     });
 

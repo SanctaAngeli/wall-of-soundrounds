@@ -46,6 +46,7 @@ export function WallScreen() {
   const { phase, roundName, songNumber, totalSongs, musicians, currentPrize,
     players, buzzedPlayer, visualEffect, songTitle, revealText, message,
     auctionBids, auctionWinner, auctionTimer, genre,
+    auctionOffersLadder, auctionCurrentOffer,
     showdownRows, showdownController, showdownLadder, showdownSongsPlayed, showdownTier,
     wtwMusicianIndex, wtwSongsWon, wtwMusiciansThisSong, wtwCurrentOffer,
     wtwStartingScore, wtwPrizes, showScoresOverlay, demoMode } = wallState;
@@ -195,7 +196,7 @@ export function WallScreen() {
         phase === 'parts-intro' || phase === 'parts-playing' ||
         phase === 'another-level-board' ||
         phase === 'showdown-year-pick' ||
-        phase === 'wtw-playing' || phase === 'wtw-walkaway-offer' || phase === 'wtw-gold' || phase === 'wtw-bust' ||
+        phase === 'wtw-playing' || phase === 'wtw-walkaway-offer' || phase === 'wtw-song-won' || phase === 'wtw-gold' || phase === 'wtw-bust' ||
         (phase === 'round-intro' && wallState.roundType === 'another-level')) && (
         <div style={{ ...styles.wallContainer, position: 'relative' }}>
           <div style={styles.wallGrid}>
@@ -266,6 +267,93 @@ export function WallScreen() {
               }}>
                 $1,000
               </div>
+            </div>
+          )}
+
+          {/* Music Auction pyramid — right of the 5x3 grid.
+              Shows the 5 cumulative bid levels: row i = "get the first (i+1) instruments for $X".
+              Visible only during the offers/bidding phase (disappears once the reveal curtain goes up).
+              Current tier (auctionCurrentOffer) highlighted with a gold glow. */}
+          {wallState.roundType === 'music-auction'
+            && (phase === 'auction-offers' || phase === 'auction-bidding')
+            && auctionOffersLadder && auctionOffersLadder.length === 5 && (
+            <div style={{
+              position: 'absolute',
+              left: 'calc(100% + 18px)',
+              top: 0,
+              bottom: 0,
+              width: 'clamp(180px, 18vw, 260px)',
+              display: 'flex', flexDirection: 'column',
+              gap: 'clamp(4px, 0.6vh, 8px)',
+              padding: '10px 8px',
+              background: 'linear-gradient(180deg, #1a1a3add, #0a0a1add)',
+              border: '1px solid #ffd70044',
+              borderRadius: '10px',
+              zIndex: 5,
+              animation: 'slide-up 0.4s ease-out',
+            }}>
+              <div style={{
+                fontSize: 'clamp(0.55rem, 0.9vw, 0.7rem)',
+                fontWeight: 900, color: '#ffd700',
+                letterSpacing: '0.1em', textTransform: 'uppercase',
+                textAlign: 'center', padding: '2px 0 6px 0',
+                borderBottom: '1px solid #ffd70033',
+              }}>
+                Bid Ladder
+              </div>
+              {auctionOffersLadder.map((offer, i) => {
+                const cumulativeInstruments = auctionOffersLadder.slice(0, i + 1);
+                const isCurrent = auctionCurrentOffer === i;
+                const isRevealed = typeof auctionCurrentOffer === 'number' && auctionCurrentOffer >= i;
+                return (
+                  <div key={i} style={{
+                    flex: 1,
+                    display: 'flex', flexDirection: 'column', justifyContent: 'center',
+                    padding: '6px 8px',
+                    // Pyramid shape: narrower at top (most cash), wider at bottom.
+                    marginLeft: `${(4 - i) * 6}px`,
+                    marginRight: `${(4 - i) * 6}px`,
+                    background: isCurrent
+                      ? 'linear-gradient(90deg, #ffd70044, #ffd70022)'
+                      : isRevealed ? '#1a1a3a88' : '#0a0a1a88',
+                    border: `1.5px solid ${isCurrent ? '#ffd700' : isRevealed ? '#ffd70033' : '#22224433'}`,
+                    borderRadius: '6px',
+                    boxShadow: isCurrent ? '0 0 20px #ffd70088' : 'none',
+                    opacity: isRevealed ? 1 : 0.35,
+                    transform: isCurrent ? 'scale(1.03)' : 'scale(1)',
+                    transition: 'all 0.3s ease',
+                  }}>
+                    <div style={{
+                      display: 'flex', alignItems: 'center', gap: '4px',
+                      fontSize: 'clamp(0.7rem, 1.1vw, 1rem)',
+                      marginBottom: '2px',
+                    }}>
+                      {cumulativeInstruments.map((s, j) => (
+                        <span key={j} title={s.instrument} style={{ lineHeight: 1 }}>{s.icon}</span>
+                      ))}
+                    </div>
+                    <div style={{
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+                    }}>
+                      <div style={{
+                        fontSize: 'clamp(0.5rem, 0.75vw, 0.62rem)',
+                        color: isCurrent ? '#ffd700' : '#8080a0',
+                        fontWeight: 700, letterSpacing: '0.04em',
+                      }}>
+                        {offer.musicianCount} MUSICIAN{offer.musicianCount === 1 ? '' : 'S'}
+                      </div>
+                      <div style={{
+                        fontSize: 'clamp(0.75rem, 1.3vw, 1.05rem)',
+                        fontWeight: 900, fontFamily: 'Montserrat',
+                        color: isCurrent ? '#ffd700' : '#fff',
+                        textShadow: isCurrent ? '0 0 10px #ffd70088' : 'none',
+                      }}>
+                        ${offer.prize >= 1000 ? `${offer.prize / 1000}k` : offer.prize}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -493,8 +581,11 @@ export function WallScreen() {
               animation: isRevealPhase ? 'scale-in 0.4s ease-out' : 'none',
             }}>
               {(() => {
-                // Map bid (musician count) to prize via the standard ladder: 1→15k, 2→6k, 3→3k, 4→2k, 5→1k
-                const PRIZE_LADDER = [15000, 6000, 3000, 2000, 1000];
+                // Map bid (musician count) to prize via the configured ladder (auctionOffersLadder
+                // carries the actual prize values, honouring /setup overrides). Fallback to defaults.
+                const PRIZE_LADDER = (auctionOffersLadder && auctionOffersLadder.length === 5)
+                  ? auctionOffersLadder.map(o => o.prize)
+                  : [15000, 6000, 3000, 2000, 1000];
                 const p1Prize = PRIZE_LADDER[(auctionBids.player1 ?? 1) - 1] ?? 0;
                 const p2Prize = PRIZE_LADDER[(auctionBids.player2 ?? 1) - 1] ?? 0;
                 return (

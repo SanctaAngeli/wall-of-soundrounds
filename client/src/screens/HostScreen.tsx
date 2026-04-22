@@ -1002,6 +1002,20 @@ export function HostScreen() {
                 >
                   REVEAL SONG
                 </button>
+                {hostState.revealText && (
+                  <button
+                    onClick={() => emit('host:clear-reveal')}
+                    style={{
+                      ...styles.controlBtn,
+                      background: '#ff4444',
+                      color: '#fff',
+                      flex: 'none', padding: '12px 20px', fontWeight: 900,
+                    }}
+                    title="Dismiss the reveal overlay on the wall"
+                  >
+                    ✕ CLOSE REVEAL
+                  </button>
+                )}
                 <button
                   onClick={() => emit('host:test-tone')}
                   style={{ ...styles.controlBtn, background: '#ffd70022', color: '#ffd700', border: '1px solid #ffd70044', flex: 'none', padding: '12px 20px' }}

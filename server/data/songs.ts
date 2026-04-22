@@ -491,6 +491,12 @@ export const roundSongSets: Record<RoundType, string[]> = {
     'virtual-insanity',       // 1996 — alternate
     'toxic',                  // 2003 — alternate
     'love-story',             // 2008 — alternate
+    // Added 2026-04-22: 5 more fallback options spanning opening instruments.
+    'poker-face',             // 2008 — keys-forward
+    'oops-i-did-it-again',    // 2000 — drum hit intro
+    'johnny-b-goode',         // 1958 — iconic guitar riff
+    'rocket-man',             // 1972 — keys opener
+    'zombie',                 // 1994 — guitar/vocals
   ],
 };
 
