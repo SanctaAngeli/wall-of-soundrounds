@@ -47,6 +47,7 @@ export function WallScreen() {
     players, buzzedPlayer, visualEffect, songTitle, revealText, message,
     auctionBids, auctionWinner, auctionTimer, genre,
     auctionOffersLadder, auctionCurrentOffer,
+    fiveToOneLadder,
     showdownRows, showdownController, showdownLadder, showdownSongsPlayed, showdownTier,
     wtwMusicianIndex, wtwSongsWon, wtwMusiciansThisSong, wtwCurrentOffer,
     wtwStartingScore, wtwPrizes, showScoresOverlay, demoMode } = wallState;
@@ -272,10 +273,11 @@ export function WallScreen() {
 
           {/* Music Auction pyramid — right of the 5x3 grid.
               Shows the 5 cumulative bid levels: row i = "get the first (i+1) instruments for $X".
-              Visible only during the offers/bidding phase (disappears once the reveal curtain goes up).
-              Current tier (auctionCurrentOffer) highlighted with a gold glow. */}
+              Visible for the WHOLE round so audience always knows the stakes; once bids are in
+              each player's chosen tier gets a colour-tinted marker. Current tier (during offers
+              reveal) highlighted with a gold glow.  */}
           {wallState.roundType === 'music-auction'
-            && (phase === 'auction-offers' || phase === 'auction-bidding')
+            && (phase === 'auction-offers' || phase === 'auction-bidding' || phase === 'auction-reveal' || phase === 'playing' || phase === 'buzzed' || phase === 'judging' || phase === 'result' || phase === 'wrong-other-player')
             && auctionOffersLadder && auctionOffersLadder.length === 5 && (
             <div style={{
               position: 'absolute',
@@ -304,10 +306,16 @@ export function WallScreen() {
               {auctionOffersLadder.map((offer, i) => {
                 const cumulativeInstruments = auctionOffersLadder.slice(0, i + 1);
                 const isCurrent = auctionCurrentOffer === i;
-                const isRevealed = typeof auctionCurrentOffer === 'number' && auctionCurrentOffer >= i;
+                // Consider a tier "revealed" once its offer has been shown on the wall.
+                // Once bidding starts (auctionCurrentOffer caps at 4) all tiers are revealed.
+                const allRevealed = phase !== 'auction-offers';
+                const isRevealed = allRevealed || (typeof auctionCurrentOffer === 'number' && auctionCurrentOffer >= i);
+                // Bid markers — which players chose THIS tier (musicianCount = i+1)?
+                const p1Here = auctionBids?.player1 === i + 1;
+                const p2Here = auctionBids?.player2 === i + 1;
                 return (
                   <div key={i} style={{
-                    flex: 1,
+                    flex: 1, position: 'relative',
                     display: 'flex', flexDirection: 'column', justifyContent: 'center',
                     padding: '6px 8px',
                     // Pyramid shape: narrower at top (most cash), wider at bottom.
@@ -351,11 +359,181 @@ export function WallScreen() {
                         ${offer.prize >= 1000 ? `${offer.prize / 1000}k` : offer.prize}
                       </div>
                     </div>
+                    {/* Bid markers — appear next to the row each player bid on */}
+                    {(p1Here || p2Here) && (
+                      <div style={{
+                        position: 'absolute',
+                        right: '-6px', top: '-6px',
+                        display: 'flex', flexDirection: 'column', gap: '2px', alignItems: 'flex-end',
+                      }}>
+                        {p1Here && (
+                          <div style={{
+                            background: PLAYER_COLORS[1], color: '#000',
+                            fontSize: 'clamp(0.5rem, 0.7vw, 0.6rem)', fontWeight: 900,
+                            padding: '2px 6px', borderRadius: '10px',
+                            boxShadow: `0 0 8px ${PLAYER_COLORS[1]}88`,
+                            letterSpacing: '0.05em',
+                          }}>
+                            {players[1].name}
+                          </div>
+                        )}
+                        {p2Here && (
+                          <div style={{
+                            background: PLAYER_COLORS[2], color: '#000',
+                            fontSize: 'clamp(0.5rem, 0.7vw, 0.6rem)', fontWeight: 900,
+                            padding: '2px 6px', borderRadius: '10px',
+                            boxShadow: `0 0 8px ${PLAYER_COLORS[2]}88`,
+                            letterSpacing: '0.05em',
+                          }}>
+                            {players[2].name}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}
             </div>
           )}
+
+          {/* Song Showdown right-side prize ladder.
+              5 tiers vertically: top = highest cash (tier 0), bottom = floor.
+              Current tier glows gold; "spent" tiers (earlier than current) dim + strike-through
+              since they can no longer be won. Replaces the small inline bar at the top chip. */}
+          {wallState.roundType === 'song-showdown' && showdownLadder && showdownLadder.length === 5
+            && phase !== 'round-intro' && phase !== 'showdown-year-pick' && (
+            <div style={{
+              position: 'absolute',
+              left: 'calc(100% + 18px)', top: 0, bottom: 0,
+              width: 'clamp(150px, 15vw, 220px)',
+              display: 'flex', flexDirection: 'column',
+              gap: 'clamp(4px, 0.6vh, 8px)',
+              padding: '10px 8px',
+              background: 'linear-gradient(180deg, #1a1a3add, #0a0a1add)',
+              border: '1px solid #ffd70044',
+              borderRadius: '10px',
+              zIndex: 5,
+            }}>
+              <div style={{
+                fontSize: 'clamp(0.55rem, 0.9vw, 0.7rem)',
+                fontWeight: 900, color: '#ffd700',
+                letterSpacing: '0.1em', textTransform: 'uppercase',
+                textAlign: 'center', padding: '2px 0 6px 0',
+                borderBottom: '1px solid #ffd70033',
+              }}>
+                Prize Ladder
+              </div>
+              {showdownLadder.map((value, i) => {
+                const isCurrent = i === showdownTier;
+                const isSpent = typeof showdownTier === 'number' && i < showdownTier;
+                return (
+                  <div key={i} style={{
+                    flex: 1,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    padding: '8px',
+                    background: isCurrent
+                      ? 'linear-gradient(90deg, #ffd70044, #ffd70022)'
+                      : '#1a1a3a88',
+                    border: `1.5px solid ${isCurrent ? '#ffd700' : '#22224455'}`,
+                    borderRadius: '6px',
+                    boxShadow: isCurrent ? '0 0 24px #ffd70088' : 'none',
+                    opacity: isSpent ? 0.3 : 1,
+                    transform: isCurrent ? 'scale(1.05)' : 'scale(1)',
+                    transition: 'all 0.4s ease',
+                  }}>
+                    <div style={{
+                      fontSize: 'clamp(1.2rem, 2.2vw, 1.8rem)',
+                      fontWeight: 900, fontFamily: 'Montserrat',
+                      color: isCurrent ? '#ffd700' : '#fff',
+                      textShadow: isCurrent ? '0 0 14px #ffd70099' : 'none',
+                      textDecoration: isSpent ? 'line-through' : 'none',
+                    }}>
+                      {formatMoney(value)}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Less is More right-side prize ladder.
+              5 rows, one per song in the round. Current song's tier glows; completed songs dim.
+              Pulls prizes from showdownLadder/etc? No — Less is More has a fixed 5-prize ladder
+              ($3k/$4k/$5k/$6k/$10k default, host-configurable). We read currentPrize to know
+              which tier is active and derive the rest from the lineup's slot. songNumber (1..5)
+              tells us the current position. */}
+          {wallState.roundType === '5to1' && phase !== 'round-intro' && phase !== 'round-complete' && totalSongs > 0 && (() => {
+            // Less is More: 5 songs with fixed prize ladder (default [3k,4k,5k,6k,10k]).
+            // Server resolves host overrides into fiveToOneLadder so the wall reads authoritative
+            // values. Fall back to defaults if the server hasn't populated it yet.
+            const defaultLadder = [3000, 4000, 5000, 6000, 10000];
+            const ladder = (fiveToOneLadder && fiveToOneLadder.length === 5) ? fiveToOneLadder : defaultLadder;
+            const activeSlot = Math.min(Math.max((songNumber ?? 1) - 1, 0), 4);
+            return (
+              <div style={{
+                position: 'absolute',
+                left: 'calc(100% + 18px)', top: 0, bottom: 0,
+                width: 'clamp(150px, 15vw, 220px)',
+                display: 'flex', flexDirection: 'column',
+                gap: 'clamp(4px, 0.6vh, 8px)',
+                padding: '10px 8px',
+                background: 'linear-gradient(180deg, #1a1a3add, #0a0a1add)',
+                border: '1px solid #8b5cf644',
+                borderRadius: '10px',
+                zIndex: 5,
+              }}>
+                <div style={{
+                  fontSize: 'clamp(0.55rem, 0.9vw, 0.7rem)',
+                  fontWeight: 900, color: '#8b5cf6',
+                  letterSpacing: '0.1em', textTransform: 'uppercase',
+                  textAlign: 'center', padding: '2px 0 6px 0',
+                  borderBottom: '1px solid #8b5cf633',
+                }}>
+                  Prize Ladder
+                </div>
+                {ladder.map((value, i) => {
+                  const isCurrent = i === activeSlot;
+                  const isDone = i < activeSlot;
+                  // Prefer the authoritative currentPrize for the active slot.
+                  const display = isCurrent && typeof currentPrize === 'number' && currentPrize > 0
+                    ? currentPrize
+                    : value;
+                  return (
+                    <div key={i} style={{
+                      flex: 1,
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      padding: '8px 10px',
+                      background: isCurrent
+                        ? 'linear-gradient(90deg, #8b5cf644, #8b5cf622)'
+                        : '#1a1a3a88',
+                      border: `1.5px solid ${isCurrent ? '#8b5cf6' : '#22224455'}`,
+                      borderRadius: '6px',
+                      boxShadow: isCurrent ? '0 0 24px #8b5cf688' : 'none',
+                      opacity: isDone ? 0.3 : 1,
+                      transform: isCurrent ? 'scale(1.05)' : 'scale(1)',
+                      transition: 'all 0.4s ease',
+                    }}>
+                      <div style={{
+                        fontSize: 'clamp(0.55rem, 0.8vw, 0.68rem)',
+                        color: isCurrent ? '#8b5cf6' : '#8080a0',
+                        fontWeight: 800, letterSpacing: '0.05em',
+                      }}>
+                        SONG {i + 1}
+                      </div>
+                      <div style={{
+                        fontSize: 'clamp(1rem, 1.8vw, 1.4rem)',
+                        fontWeight: 900, fontFamily: 'Montserrat',
+                        color: isCurrent ? '#fff' : '#aaa',
+                        textShadow: isCurrent ? '0 0 10px #8b5cf699' : 'none',
+                      }}>
+                        {formatMoney(display)}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
         </div>
       )}
 
@@ -366,7 +544,9 @@ export function WallScreen() {
       {/* ============================================ */}
       {wallState.roundType === 'song-showdown' && showdownRows && phase !== 'lobby' && phase !== 'round-complete' && (
         <>
-          {/* Prize ladder + controller chip */}
+          {/* Top chip: SONG X/6 + controller name only. The 5-tier prize ladder moved to a
+              right-side vertical display (see below) so the audience can track the money
+              dropping more dramatically. */}
           <div style={{
             position: 'absolute', top: '80px', left: '50%', transform: 'translateX(-50%)',
             display: 'flex', alignItems: 'center', gap: 18, zIndex: 10,
@@ -385,18 +565,6 @@ export function WallScreen() {
                 color: PLAYER_COLORS[showdownController],
               }}>
                 {players[showdownController].name} PICKS
-              </span>
-            )}
-            {showdownLadder && (
-              <span style={{ display: 'flex', gap: 6, fontSize: '0.8rem', fontWeight: 800 }}>
-                {showdownLadder.map((v, i) => (
-                  <span key={i} style={{
-                    color: i === showdownTier ? '#ffd700' : '#666',
-                    textShadow: i === showdownTier ? '0 0 12px #ffd70080' : 'none',
-                  }}>
-                    {formatMoney(v)}
-                  </span>
-                ))}
               </span>
             )}
           </div>
@@ -1015,29 +1183,33 @@ function ScoreCard({ name, score, isBuzzed, eliminated, color }: {
 }) {
   return (
     <div style={{
-      padding: '8px 20px',
+      padding: '12px 26px',
       background: isBuzzed ? '#ffd70033' : '#1a1a3a',
       border: `2px solid ${isBuzzed ? '#ffd700' : eliminated ? '#444' : '#333'}`,
-      borderRadius: '8px',
+      borderRadius: '10px',
       textAlign: 'center',
-      minWidth: '150px',
+      minWidth: '200px',
       animation: isBuzzed ? 'glow-pulse 1s ease-in-out infinite' : 'none',
       color: isBuzzed ? '#ffd700' : 'inherit',
       opacity: eliminated ? 0.45 : 1,
       position: 'relative',
     }}>
       <div style={{
-        fontSize: '0.75rem', fontWeight: 600, opacity: 0.7, textTransform: 'uppercase',
+        fontSize: '0.85rem', fontWeight: 700, opacity: 0.8, textTransform: 'uppercase',
+        letterSpacing: '0.08em',
         color: isBuzzed ? undefined : color,
         textDecoration: eliminated ? 'line-through' : 'none',
       }}>
         {name}
       </div>
       <div style={{
-        fontSize: '1.3rem',
-        fontWeight: 800,
+        fontSize: '2.2rem',
+        fontWeight: 900,
         fontFamily: 'Montserrat',
         color: '#ffd700',
+        lineHeight: 1.1,
+        marginTop: '2px',
+        textShadow: '0 0 12px #ffd70055',
       }}>
         {formatMoney(score)}
       </div>

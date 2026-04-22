@@ -226,7 +226,7 @@ export function createInitialState(): GameState {
       songYearOverrides: {},
       // Song Showdown toss-up defaults to a broadly-known song not in any other round's pool.
       // Host can swap via /setup → Song Showdown tab → Toss Up picker.
-      songShowdownTossUp: 'murder-on-the-dance-floor',
+      songShowdownTossUp: '',
     },
   };
 }
@@ -390,7 +390,7 @@ export function resetConfig(state: GameState): void {
     musicAuctionOverrides: {},
     songYearOverrides: {},
     songShowdownLineup: [],
-    songShowdownTossUp: 'murder-on-the-dance-floor',
+    songShowdownTossUp: '',
     winTheWallLineup: [],
     winTheWallPrizes: {},
     winTheWallByInstrument: {},
@@ -453,6 +453,14 @@ function generateWallMusicians(state: GameState): WallMusician[] {
     return generateWtwWallMusicians(state);
   }
 
+  // Less is More: scatter the 5 active stems randomly across the 15 cells (same visual
+  // pattern as Music Auction) so the audience sees musicians pop up around the whole board
+  // rather than staying in one row. Deterministic per song id so cells don't re-shuffle on
+  // every broadcast. Producer feedback 2026-04-22.
+  if (state.roundType === '5to1') {
+    return generateFiveToOneWallMusicians(state);
+  }
+
   const musicians: WallMusician[] = [];
   const stems = state.currentSong?.stems || [];
 
@@ -460,16 +468,10 @@ function generateWallMusicians(state: GameState): WallMusician[] {
   const numCols = 5;
   let id = 1;
 
-  // R1 "5 to 1": each song is assigned a single wall row. Songs 1→5 cycle rows 1→2→3→1→2.
-  // Only cells in the designated row light up; the other two rows stay dim silhouettes.
-  const fiveToOneRow = state.roundType === '5to1' ? (state.currentSongIndex % 3) + 1 : null;
-
   for (let row = 0; row < 3; row++) {
     for (let col = 0; col < numCols; col++) {
       const stem = stems[col];
-      // R1: stem is active only if it's in activeStems AND this cell belongs to the song's row.
-      const rowMatches = fiveToOneRow == null || (row + 1) === fiveToOneRow;
-      const defaultActive = stem ? (state.activeStems.includes(stem.id) && rowMatches) : false;
+      const defaultActive = stem ? state.activeStems.includes(stem.id) : false;
 
       musicians.push({
         id,
@@ -614,6 +616,46 @@ function generateWtwWallMusicians(state: GameState): WallMusician[] {
 // R3 "Music Auction": wall stays mostly empty — only the 5 offer cells (randomised across the 15
 // wall positions) show an instrument + speech bubble. After bidding resolves, losing offers go
 // dark and only the winning N cells stay lit & playing.
+// Less is More wall: scatter the 5 stems across the 15 cells, deterministic per song id
+// so the layout stays stable across state broadcasts. Other 10 cells stay blank (dim).
+function generateFiveToOneWallMusicians(state: GameState): WallMusician[] {
+  const musicians: WallMusician[] = [];
+  const stems = state.currentSong?.stems ?? [];
+  const songId = state.currentSong?.id ?? '';
+  // Hash the song id into a deterministic seed, then shuffle [1..15] and take the first 5.
+  let seed = 0;
+  for (let i = 0; i < songId.length; i++) seed = (seed * 31 + songId.charCodeAt(i)) >>> 0;
+  const rand = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 0x100000000; };
+  const cellIds = Array.from({ length: 15 }, (_, i) => i + 1);
+  for (let i = cellIds.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [cellIds[i], cellIds[j]] = [cellIds[j], cellIds[i]];
+  }
+  const scatteredCells = cellIds.slice(0, Math.min(5, stems.length));
+  const stemByCell = new Map<number, Stem>();
+  for (let i = 0; i < scatteredCells.length; i++) stemByCell.set(scatteredCells[i], stems[i]);
+
+  let id = 1;
+  for (let row = 0; row < 3; row++) {
+    for (let col = 0; col < 5; col++) {
+      const stem = stemByCell.get(id);
+      const isActive = stem ? state.activeStems.includes(stem.id) : false;
+      musicians.push({
+        id,
+        row: row + 1,
+        col: col + 1,
+        instrument: stem?.instrument ?? '',
+        icon: stem?.icon ?? '',
+        color: stem ? (stem.color ?? ROW_COLORS[row][col]) : ROW_COLORS[row][col],
+        isActive,
+        isPlaying: isActive && state.isAudioPlaying && !!stem,
+      });
+      id++;
+    }
+  }
+  return musicians;
+}
+
 function generateAuctionWallMusicians(state: GameState): WallMusician[] {
   const musicians: WallMusician[] = [];
   const offerByCell = new Map<number, typeof state.auctionOffers[number]>();
@@ -807,6 +849,7 @@ export function deriveWallState(state: GameState): WallState {
     showdownController: state.roundType === 'song-showdown' ? state.showdownControllerPlayer : undefined,
     showdownTier: state.roundType === 'song-showdown' ? state.showdownTier : undefined,
     showdownLadder: state.roundType === 'song-showdown' ? showdownLadder(state) : undefined,
+    fiveToOneLadder: state.roundType === '5to1' ? resolveRoundPrizes(state, '5to1') : undefined,
     showdownSongsPlayed: state.roundType === 'song-showdown' ? state.showdownSongsPlayed : undefined,
     showdownLockedPlayers: state.roundType === 'song-showdown' ? state.showdownLockedPlayers : undefined,
     showdownSelectedRow: state.roundType === 'song-showdown' ? state.showdownSelectedRow : undefined,
@@ -2649,8 +2692,12 @@ export function wtwAdvanceMusician(state: GameState): { stemId: number | null; a
   state.wtwMusicianIndex += 1;
   state.wtwMusiciansThisSong += 1;
 
-  // 5-musician cap — song dies, auto-skip (caller will fade out all stems + load next song)
-  if (state.wtwMusiciansThisSong > 5) {
+  // Cap: min(5, cells remaining in snake from this song's start) — if only 3 cells are left
+  // when a song begins, the song only gets 3 stems before auto-skip, not 5. Prevents the audio
+  // building up to a full 5-stem mix when the wall can't even show that many more cells.
+  const cellsFromSongStart = WTW_SNAKE.length - state.wtwSongStartIndex;
+  const perSongCap = Math.min(5, cellsFromSongStart);
+  if (state.wtwMusiciansThisSong > perSongCap) {
     return wtwSkipSongInternal(state, 'auto');
   }
 

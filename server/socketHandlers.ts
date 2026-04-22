@@ -797,22 +797,29 @@ export function setupSocketHandlers(io: Server, state: GameState) {
     // ============================================
     // Ticker: every 5s fade the next stem in + drop the prize tier. Kicked off when a year is
     // picked, cleared on buzz / correct / wrong / next-song.
+    // First gap after a new song loads is 7s (producer feedback 2026-04-22: audience needs
+     // an extra couple of seconds on the opening stem before the next one joins). Every
+     // subsequent tick is 5s. The wrong-buzz ticker-restart at line ~457 stays at a flat 5s
+     // since it's already mid-song — the +2s pad is only for the opening stem of each song.
     const startShowdownTicker = () => {
       showdownClearTimer(state);
-      state.showdownTimerInterval = setInterval(() => {
-        // Runs during main-song 'playing' OR 'showdown-toss-up' (same cadence, different prize rules).
-        if (state.roundType !== 'song-showdown' || (state.phase !== 'playing' && state.phase !== 'showdown-toss-up')) {
-          showdownClearTimer(state);
-          return;
-        }
-        const stemId = showdownAdvanceTier(state);
-        if (stemId != null) {
-          sendAudioCommand(io, { action: 'fade-in-stem', stemId, duration: 400 });
-        }
-        // If we've hit the floor, the tier stops advancing but audio keeps playing. No more
-        // stems to add; let it loop until a buzz or host-forced next-song / skip.
-        broadcastState(io, state);
-      }, 5000);
+      const schedule = (ms: number) => {
+        state.showdownTimerInterval = setTimeout(() => {
+          if (state.roundType !== 'song-showdown' || (state.phase !== 'playing' && state.phase !== 'showdown-toss-up')) {
+            showdownClearTimer(state);
+            return;
+          }
+          const stemId = showdownAdvanceTier(state);
+          if (stemId != null) {
+            sendAudioCommand(io, { action: 'fade-in-stem', stemId, duration: 400 });
+          }
+          broadcastState(io, state);
+          // All subsequent gaps are 5s. If we've hit the floor, advanceTier is a no-op but
+          // the chain keeps scheduling so a later buzz can still trigger clear.
+          schedule(5000);
+        }, ms);
+      };
+      schedule(7000);
     };
 
     socket.on('host:showdown-pick-year', (data: { songId: string }) => {

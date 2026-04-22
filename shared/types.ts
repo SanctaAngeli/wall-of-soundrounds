@@ -131,6 +131,9 @@ export interface WallState {
   partsColumnForfeits?: boolean[];
   partsLockedPlayers?: (1 | 2)[];
   partsRevealing?: boolean;
+  // Less is More: resolved 5-entry prize ladder (default [3k,4k,5k,6k,10k]; host-configurable
+  // via /setup). Used by the right-side ladder display on the wall.
+  fiveToOneLadder?: number[];
   // Song Showdown — 3 rows, one year label per row. selected row = currently playing.
   showdownRows?: { row: number; year: number; songId: string; selected: boolean; done: boolean }[];
   showdownController?: PlayerId | null;     // whose turn to pick a year
