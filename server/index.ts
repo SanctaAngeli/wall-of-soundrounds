@@ -37,9 +37,17 @@ app.use('/audio', express.static(path.join(publicDir, 'audio')));
     const beforeExtras = song.extraStems?.length ?? 0;
     song.stems = song.stems.filter(s => exists(s.file));
     if (song.extraStems) song.extraStems = song.extraStems.filter(s => exists(s.file));
+    // Detect pre-rendered prove-out file. If present, the prove-out host button will load and
+    // play this single MP3 instead of fading all stems in — matches producer expectation of
+    // hearing the actual full mix the band recorded. PROVE_OUT.mp3 beats FULL.mp3 if both
+    // exist (future-proofs a dedicated prove-out file alongside the import-script FULL mix).
+    if (exists('PROVE_OUT.mp3')) song.proveOutFile = 'PROVE_OUT.mp3';
+    else if (exists('FULL.mp3')) song.proveOutFile = 'FULL.mp3';
     dropped += (beforePrimary - song.stems.length) + (beforeExtras - (song.extraStems?.length ?? 0));
   }
   if (dropped > 0) console.log(`[library] filtered out ${dropped} declared-but-missing stem file(s)`);
+  const withProveOut = songLibrary.filter(s => s.proveOutFile).length;
+  if (withProveOut > 0) console.log(`[library] ${withProveOut} song(s) have a prove-out full mix`);
 }
 
 // Full song library for /setup — returns every song with its full stem list.

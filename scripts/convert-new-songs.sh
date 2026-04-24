@@ -132,8 +132,16 @@ process() {
     fi
   done
 
-  # Full mix (Print Master or PO)
-  local fullSrc; fullSrc=$(find_one "$folder" "*21_22*.wav")
+  # Full mix / Prove Out — preferred order: *PO*.wav (dedicated prove-out export) → 21_22
+  # Print Master → any *Full*.wav fallback. Whichever we find becomes PROVE_OUT.mp3 AND a
+  # copy of the historical FULL.mp3 name (both land in the song folder; server prefers
+  # PROVE_OUT.mp3 if present, falls back to FULL.mp3). Producer (Jessie) refers to these
+  # as "PO" files — the band provides them alongside stems.
+  local poSrc; poSrc=$(find_first "$folder" "*PO.wav" "* PO *.wav" "*_PO*.wav" "*-PO*.wav")
+  if [ -n "$poSrc" ]; then
+    to_mp3 "$poSrc" "$out/PROVE_OUT.mp3" && echo "  ✓ PROVE_OUT.mp3  (from $(basename "$poSrc"))"
+  fi
+  local fullSrc; fullSrc=$(find_first "$folder" "*21_22*.wav" "*Print Master*.wav" "*Full Mix*.wav")
   if [ -n "$fullSrc" ]; then
     to_mp3 "$fullSrc" "$out/FULL.mp3" && echo "  ✓ FULL.mp3"
   fi

@@ -1873,17 +1873,31 @@ export function auctionRevealBids(state: GameState): { winner: 1 | 2 | 'tied'; m
   state.visualEffect = 'none';
   state.isAudioPlaying = false;
 
-  // Set prize based on winner's bid: fewer musicians = higher prize
-  const prizes = roundPrizes['music-auction'];
+  // Set prize based on winner's bid: fewer musicians = higher prize. Honour host overrides
+  // from /setup (resolveRoundPrizes) so the reveal shows what the player will actually win.
+  const prizes = resolveRoundPrizes(state, 'music-auction');
   // prizes[0] = 1 musician prize ($15k), prizes[4] = 5 musicians ($1k)
   state.currentPrize = prizes[winnerBid - 1] || 1000;
 
   // Activate the winning stems from the randomised offers (cumulative: winnerBid = 2 -> offers[0..1]).
-  // Falls back to song.stems slice if offers weren't set up (shouldn't happen).
+  // Falls back to song.stems slice if offers weren't set up (shouldn't happen). Dedupe the
+  // final list defensively — if for some reason two offers share a stem id (stem-arrangement
+  // pad collision, duplicate source song data, etc) the audience would hear N-1 instruments
+  // when the bid called for N. The dedupe ensures activeStems.length === unique count.
+  let winningStemIds: number[] = [];
   if (state.auctionOffers.length > 0) {
-    state.activeStems = state.auctionOffers.slice(0, winnerBid).map(o => o.stemId);
+    winningStemIds = state.auctionOffers.slice(0, winnerBid).map(o => o.stemId);
   } else if (state.currentSong) {
-    state.activeStems = state.currentSong.stems.slice(0, winnerBid).map(s => s.id);
+    winningStemIds = state.currentSong.stems.slice(0, winnerBid).map(s => s.id);
+  }
+  const seen = new Set<number>();
+  state.activeStems = winningStemIds.filter(id => {
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+  if (state.activeStems.length < winnerBid) {
+    console.warn(`[auction] winnerBid=${winnerBid} but only ${state.activeStems.length} unique stems — check offer setup for ${state.currentSong?.id}`);
   }
 
   if (winner === 'tied') {
@@ -2304,8 +2318,10 @@ function resolveShowdownStemOrder(state: GameState, song: Song): number[] {
   return song.stems.slice(0, 5).map(s => s.id);
 }
 
-// Host picks a year → load the chosen song, row lights up, first stem plays. The interval timer
-// fires every 5s to add the next stem + drop the tier.
+// Host picks a year → ARM the song (load audio, highlight row, but DON'T start playing yet).
+// Phase goes to 'showdown-armed' so the wall shows the row highlighted while Wes sets up the
+// moment. Host then presses START → showdownStartPlaying fires the first stem + ticker.
+// Producer feedback 2026-04-23 (2-step reveal).
 export function showdownPickYear(state: GameState, songId: string): { loaded: Song | null; firstStem: number | null } {
   if (state.roundType !== 'song-showdown') return { loaded: null, firstStem: null };
   const rowIdx = state.showdownYearsVisible.indexOf(songId);
@@ -2321,14 +2337,25 @@ export function showdownPickYear(state: GameState, songId: string): { loaded: So
   state.showdownLockedPlayers = [];
   state.activeStems = state.showdownStemJoinOrder.slice(0, 1);
   state.currentPrize = showdownLadder(state)[0];
-  state.phase = 'playing';
+  state.phase = 'showdown-armed';               // audio loaded, NOT yet playing
   state.buzzedPlayer = null;
   state.visualEffect = 'none';
   state.message = '';
   state.songTitle = '';
   state.revealText = '';
-  state.isAudioPlaying = true;
+  state.isAudioPlaying = false;
   return { loaded: song, firstStem: state.activeStems[0] ?? null };
+}
+
+// Step 2 of the year-pick flow: actually start playing. Moves phase from showdown-armed →
+// playing so the ticker handler can begin advancing. Returns the first stem ID so the caller
+// can fade it in.
+export function showdownStartPlaying(state: GameState): number | null {
+  if (state.roundType !== 'song-showdown') return null;
+  if (state.phase !== 'showdown-armed') return null;
+  state.phase = 'playing';
+  state.isAudioPlaying = true;
+  return state.activeStems[0] ?? null;
 }
 
 // Advance one tier: add next stem, drop prize value. Returns the stem to fade in (or null if at cap).

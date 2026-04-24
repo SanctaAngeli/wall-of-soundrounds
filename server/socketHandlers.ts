@@ -59,6 +59,7 @@ import {
   importConfig,
   // Song Showdown
   showdownPickYear,
+  showdownStartPlaying,
   showdownAdvanceTier,
   showdownNextSong,
   showdownClearTimer,
@@ -586,14 +587,35 @@ export function setupSocketHandlers(io: Server, state: GameState) {
     // play the full song) as a "prove out" moment. Puts all primary+extra stems on the stack.
     socket.on('host:prove-out', () => {
       if (!state.currentSong) return;
+      // If the song has a pre-rendered PROVE_OUT.mp3 sitting in its audio folder, load THAT
+      // single file and play it — the band's real full-mix recording, not the layered stems.
+      // Detected at server startup (see server/index.ts library scrub).
+      if (state.currentSong.proveOutFile) {
+        const proveStem = {
+          id: 9000,
+          file: state.currentSong.proveOutFile,
+          instrument: 'Full Mix',
+          icon: '🎵',
+          color: '#00d4ff',
+        };
+        state.activeStems = [9000];
+        state.isAudioPlaying = true;
+        sendAudioCommand(io, { action: 'load', songId: state.currentSong.id, stems: [proveStem] });
+        // Slight delay so audio graph wires up before playing
+        setTimeout(() => {
+          sendAudioCommand(io, { action: 'play' });
+          sendAudioCommand(io, { action: 'fade-in-stem', stemId: 9000, duration: 400 });
+        }, 200);
+        broadcastState(io, state);
+        return;
+      }
+      // Fallback: fade all loaded stems in (the layered-mix approach).
       const allStemIds = [
         ...state.currentSong.stems.map(s => s.id),
         ...(state.currentSong.extraStems ?? []).map(s => s.id),
       ];
-      // Ensure the audio engine has them tracked (some rounds only activate a subset).
       state.activeStems = allStemIds;
       state.isAudioPlaying = true;
-      // The current audio might be paused (buzz state) — restart play, then fade everything in.
       sendAudioCommand(io, { action: 'play' });
       sendAudioCommand(io, { action: 'fade-all-in', duration: 400 });
       broadcastState(io, state);
@@ -693,9 +715,11 @@ export function setupSocketHandlers(io: Server, state: GameState) {
       }
       sendAudioCommand(io, { action: 'play' });
 
-      // Start 30-second buzz timer for solo winners (tied pairs race without a timer cap)
+      // 15-second buzz timer for solo winners (tied pairs race without a timer cap).
+      // Producer trimmed from 30→15 on 2026-04-23 after noting ~3s audio-start delay still
+      // leaves plenty of guess time.
       if (state.auctionWinner !== 'tied') {
-        state.auctionTimerValue = 30;
+        state.auctionTimerValue = 15;
         state.auctionTimerInterval = setInterval(() => {
           if (state.auctionTimerValue !== null && state.auctionTimerValue > 0) {
             state.auctionTimerValue--;
@@ -825,24 +849,31 @@ export function setupSocketHandlers(io: Server, state: GameState) {
     socket.on('host:showdown-pick-year', (data: { songId: string }) => {
       if (state.roundType !== 'song-showdown') return;
       if (state.phase !== 'showdown-year-pick' && state.phase !== 'result') return;
-      const { loaded, firstStem } = showdownPickYear(state, data.songId);
+      const { loaded } = showdownPickYear(state, data.songId);
       if (!loaded) return;
-      // Load BOTH primary + extra stems so arrangements referencing LVs, horns, BVs, etc.
-      // actually produce audio when they fade in. Without this, dropping LV_GAV into slot 1
-      // on /setup produces silence — the audio engine doesn't know about extras unless told.
+      // Load BOTH primary + extra stems — audio graph is now warm but muted (phase is
+      // 'showdown-armed', NOT 'playing'). Host presses START on /host when they're ready
+      // to fire the first stem + kick the ticker.
       sendAudioCommand(io, {
         action: 'load',
         songId: loaded.id,
         stems: [...loaded.stems, ...(loaded.extraStems ?? [])],
       });
-      // Slight delay to let audio graph wire up before fading in
+      broadcastState(io, state);
+    });
+
+    socket.on('host:showdown-start-playing', () => {
+      if (state.roundType !== 'song-showdown') return;
+      const firstStem = showdownStartPlaying(state);
+      if (firstStem == null) {
+        broadcastState(io, state);
+        return;
+      }
+      // Slight delay for audio graph (buffers may still be decoding if the host was quick).
       setTimeout(() => {
         sendAudioCommand(io, { action: 'play' });
-        if (firstStem != null) {
-          sendAudioCommand(io, { action: 'fade-in-stem', stemId: firstStem, duration: 400 });
-        }
+        sendAudioCommand(io, { action: 'fade-in-stem', stemId: firstStem, duration: 400 });
         broadcastState(io, state);
-        // Start the 5s ticker
         startShowdownTicker();
       }, 200);
       broadcastState(io, state);

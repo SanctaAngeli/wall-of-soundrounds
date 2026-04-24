@@ -197,6 +197,7 @@ export function WallScreen() {
         phase === 'parts-intro' || phase === 'parts-playing' ||
         phase === 'another-level-board' ||
         phase === 'showdown-year-pick' ||
+        phase === 'showdown-armed' ||
         phase === 'wtw-playing' || phase === 'wtw-walkaway-offer' || phase === 'wtw-song-won' || phase === 'wtw-gold' || phase === 'wtw-bust' ||
         (phase === 'round-intro' && wallState.roundType === 'another-level')) && (
         <div style={{ ...styles.wallContainer, position: 'relative' }}>

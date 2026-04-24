@@ -24,7 +24,7 @@ const COL_NAMES = ['Vocals', 'Guitar', 'Keys', 'Bass', 'Drums'];
 const ROUND_LABELS: Record<RoundType, string> = {
   '5to1': 'Less is More',
   'another-level': 'Another Level',
-  'music-auction': 'Music Auction',
+  'music-auction': 'Bet the Beat',
   'song-in-5-parts': 'Song in 5 Parts',
   'song-showdown': 'Song Showdown',
   'win-the-wall': 'Win the Wall',
@@ -632,7 +632,7 @@ export function SetupScreen() {
                   <div style={{ marginTop: '14px', padding: '10px', background: '#1a1a3a', borderRadius: '8px', border: '1px solid #8b5cf644' }}>
                     <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: '6px' }}>
                       <div style={{ fontSize: '0.75rem', color: '#8b5cf6', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-                        Stem arrangement (Less is More · Song Showdown · Music Auction)
+                        Stem arrangement (Less is More · Song Showdown · Bet the Beat)
                       </div>
                       <div style={{ display: 'flex', gap: '4px' }}>
                         <button
@@ -653,7 +653,7 @@ export function SetupScreen() {
                       Drag any stem (primary or extra) into a slot. Applies globally — every round this song plays in uses this arrangement.
                       <strong> Less is More:</strong> slot 1 is what plays alone in the 1-stem song.
                       <strong> Song Showdown:</strong> slot 1 is the first musician to join (highest cash offer).
-                      <strong> Music Auction:</strong> slot 1 is the first offer ($15k), slot 5 is the last ($1k).
+                      <strong> Bet the Beat:</strong> slot 1 is the first offer ($15k), slot 5 is the last ($1k).
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '6px' }}>
                       {order.slice(0, 5).map((stemId, i) => {
@@ -713,7 +713,7 @@ export function SetupScreen() {
                     + Less is More
                   </button>
                   <button onClick={() => addToRound('music-auction', selected.id)} style={{ ...S.btn, background: '#8b5cf6', color: '#fff', fontSize: '0.7rem', padding: '6px 10px' }}>
-                    + Music Auction
+                    + Bet the Beat
                   </button>
                   <button onClick={() => addToRound('win-the-wall', selected.id)} style={{ ...S.btn, background: '#ffd700', color: '#000', fontSize: '0.7rem', padding: '6px 10px' }}>
                     + Win the Wall

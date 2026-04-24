@@ -253,6 +253,22 @@ export function HostScreen() {
                   </div>
                 )}
 
+                {/* After year-pick the song is armed (row highlighted, audio loaded, NOT
+                    playing yet). Gives Wes room to chat before the first stem fires. Host
+                    presses START to kick off the reveal. */}
+                {phase === 'showdown-armed' && (
+                  <button
+                    onClick={() => emit('host:showdown-start-playing')}
+                    style={{
+                      ...styles.controlBtn,
+                      background: '#00ff88', color: '#000',
+                      marginTop: 10, width: '100%', fontSize: '1rem',
+                      fontWeight: 900, letterSpacing: '0.1em', padding: '16px',
+                    }}>
+                    ▶ START MUSIC
+                  </button>
+                )}
+
                 {/* After a result: "Next song" button */}
                 {phase === 'result' && (
                   <button
@@ -618,7 +634,7 @@ export function HostScreen() {
             {/* ============================================ */}
             {roundType === 'music-auction' && (phase === 'auction-offers' || phase === 'auction-bidding' || phase === 'auction-reveal' || phase === 'playing' || phase === 'buzzed' || phase === 'judging' || phase === 'wrong-other-player' || phase === 'result') && (
               <div style={styles.section}>
-                <h2 style={styles.sectionTitle}>Music Auction</h2>
+                <h2 style={styles.sectionTitle}>Bet the Beat</h2>
 
                 {/* Timer display */}
                 {auctionTimer != null && auctionTimer > 0 && (
@@ -1112,26 +1128,12 @@ export function HostScreen() {
                     WRONG — GIVE TO {players[buzzedPlayer === 1 ? 2 : 1].name.toUpperCase()}
                   </button>
                 )}
-                <button
-                  onClick={() => emit('host:prove-out')}
-                  title="Fade all stems in so everyone hears the full mix — great for 'prove out' moments after a correct guess."
-                  style={{
-                    ...styles.controlBtn,
-                    background: '#00d4ff',
-                    color: '#000',
-                    width: '100%',
-                    marginTop: '8px',
-                    fontWeight: 900, letterSpacing: '0.1em',
-                  }}
-                >
-                  ▶ PLAY FULL SONG (prove out)
-                </button>
               </div>
             )}
 
-            {/* Prove-out button also available any time a song is loaded and we're not in a
-                dedicated round-specific UI state where it'd be confusing. Host has this even
-                without a live buzz so they can play a song from start after a reveal, etc. */}
+            {/* Prove-out button lives OUTSIDE the judge panel so pressing it after CORRECT doesn't
+                override the scoring action (producer feedback 2026-04-23). Visible whenever a song
+                is loaded and we're not mid-setup or inside a phase with its own dedicated button. */}
             {currentSong && !buzzedPlayer && phase !== 'lobby' && phase !== 'round-intro' && phase !== 'round-complete' && phase !== 'auction-offers' && phase !== 'auction-bidding' && (
               <div style={{ ...styles.section, padding: '10px 12px' }}>
                 <button

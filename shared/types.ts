@@ -23,6 +23,11 @@ export interface Song {
   // Only present for songs from the new WOS library.
   extraStems?: Stem[];
   wrongAnswers: string[];
+  // Populated at server startup if a pre-rendered full-mix file exists in the song's audio
+  // folder (PROVE_OUT.mp3 preferred; falls back to FULL.mp3 which the import script already
+  // produces from the band's 21_22 Print Master WAV). The prove-out button plays this single
+  // file instead of fading the layered stems in.
+  proveOutFile?: string;
 }
 
 export type RoundType = '5to1' | 'another-level' | 'music-auction' | 'song-in-5-parts' | 'song-showdown' | 'win-the-wall';
@@ -51,6 +56,10 @@ export type GamePhase =
   | 'showdown-toss-up'
   // Song Showdown specific: controller picks a year from the 3 visible rows
   | 'showdown-year-pick'
+  // Song Showdown: year has been picked, row is highlighted, audio is loaded but NOT playing.
+  // Producer's "let Wes chat for a beat" window — host presses START to fire the first stem
+  // and kick off the ticker. Producer feedback 2026-04-23.
+  | 'showdown-armed'
   // Win the Wall specific
   | 'wtw-playing'                 // musician snake is ticking, buzz open
   | 'wtw-walkaway-offer'          // at 3 or 5 songs: offer walkaway vs keep-going
@@ -342,6 +351,9 @@ export interface ClientEvents {
   'host:reveal-song': {};
   // Dismiss the reveal overlay on the wall (all rounds)
   'host:clear-reveal': {};
+  // Song Showdown: start playing the armed song (fade first stem in, kick off ticker).
+  // Called from /host after pick-year when phase is 'showdown-armed'.
+  'host:showdown-start-playing': {};
   // Setup / library editor
   'host:config-set-round-lineup': { round: RoundType; songIds: string[] };
   'host:config-set-al-group-song': { group: string; songId: string };
@@ -451,7 +463,7 @@ export const ROW_COLORS = [
 export const ROUND_NAMES: Record<RoundType, string> = {
   '5to1': 'LESS IS MORE',
   'another-level': 'ANOTHER LEVEL',
-  'music-auction': 'MUSIC AUCTION',
+  'music-auction': 'BET THE BEAT',
   'song-in-5-parts': 'SONG IN 5 PARTS',
   'song-showdown': 'SONG SHOWDOWN',
   'win-the-wall': 'WIN THE WALL',
