@@ -431,11 +431,19 @@ export function HostScreen() {
                     <span style={{ marginLeft: 10 }}>Next gate: {formatMoney(wtwJackpotIfWon ?? 0)}</span>
                   </div>
                 )}
-                {phase === 'wtw-playing' && (
+                {(phase === 'wtw-playing' || phase === 'wtw-song-won') && (
                   <button onClick={() => emit('host:wtw-skip')}
-                    title="Move on to the next song in the lineup. No musicians burned — the new song picks up at the current snake cell."
-                    style={{ ...styles.controlBtn, background: '#00d4ff', color: '#000', width: '100%', fontWeight: 900 }}>
-                    NEXT SONG →
+                    title={phase === 'wtw-song-won'
+                      ? 'Move on to the next song — the snake advances by one cell and a new song starts on that instrument.'
+                      : 'Move on to the next song in the lineup. No musicians burned — the new song picks up at the current snake cell.'}
+                    style={{
+                      ...styles.controlBtn,
+                      background: phase === 'wtw-song-won' ? '#00ff88' : '#00d4ff',
+                      color: '#000', width: '100%', fontWeight: 900,
+                      padding: phase === 'wtw-song-won' ? '16px' : undefined,
+                      fontSize: phase === 'wtw-song-won' ? '1rem' : undefined,
+                    }}>
+                    {phase === 'wtw-song-won' ? '▶ START NEXT SONG' : 'NEXT SONG →'}
                   </button>
                 )}
 

@@ -400,6 +400,8 @@ export interface ClientEvents {
   'host:config-set-wtw-lineup': { songIds: string[] };
   // Replace the list of songs tagged for a given starting instrument. Pass [] to clear.
   'host:config-set-wtw-by-instrument': { instrument: 'Drums' | 'Bass' | 'Keys' | 'Guitar' | 'Vocals'; songIds: string[] };
+  // Assign a song to a specific snake cell (0-14). Pass null to clear.
+  'host:config-set-wtw-cell': { cellIndex: number; songId: string | null };
   // Set a round's prize ladder (5 values). Pass null to clear back to default.
   'host:config-set-round-prizes': { round: '5to1' | 'music-auction' | 'song-in-5-parts' | 'song-showdown'; values: number[] | null };
   // Set the Song Showdown toss-up fixed prize. Pass null to clear back to $1,000.
@@ -510,7 +512,16 @@ export interface GameConfig {
   // cell the song opens from). Each snake cell owns an instrument (col 0=Drums … col 4=Vocals);
   // when WTW needs the next song, it first tries songs tagged for the current cell's
   // instrument before falling back to winTheWallLineup. Songs may appear in multiple columns.
+  // DEPRECATED — superseded by winTheWallByCell. Kept as a fallback for configs exported
+  // before the per-cell editor shipped. Will be removed once the producer-facing grid is
+  // the only entry point.
   winTheWallByInstrument?: Partial<Record<'Drums' | 'Bass' | 'Keys' | 'Guitar' | 'Vocals', string[]>>;
+  // Win the Wall: 15-slot per-cell song assignment matching the snake path
+  // (index = snake cell index 0..14 → bottom L→R, middle R→L, top L→R). When the round
+  // needs to start a new song at cell N, it plays winTheWallByCell[N] with that cell's
+  // instrument as the opening stem. Entries are song IDs or null (falls through to legacy
+  // per-instrument tag, then to winTheWallLineup). Producer-curated grid editor in /setup.
+  winTheWallByCell?: (string | null)[];
   // Win the Wall: per-gate cash values (songs 3, 5, 6). Overrides the hard-coded
   // $50k / $100k / $250k defaults. Missing keys fall through to the default.
   // All three are ADDITIVE on top of banked earnings from earlier rounds.

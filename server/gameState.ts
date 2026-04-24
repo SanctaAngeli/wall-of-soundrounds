@@ -323,6 +323,21 @@ export function setWtwByInstrument(state: GameState, instrument: 'Drums' | 'Bass
   state.config.winTheWallByInstrument[instrument] = [...songIds];
 }
 
+// Assign a song to a specific snake cell. Index is 0..14 (out-of-range is silently ignored).
+// Null clears that cell — runtime will fall through to the legacy per-instrument pool, then
+// to the ordered lineup. Producer's per-cell editor writes here.
+export function setWtwCell(state: GameState, cellIndex: number, songId: string | null): void {
+  if (cellIndex < 0 || cellIndex >= WTW_SNAKE.length) return;
+  if (!state.config.winTheWallByCell) {
+    state.config.winTheWallByCell = Array(WTW_SNAKE.length).fill(null);
+  }
+  // Ensure the array is always the full length (imports from older configs might be short).
+  while (state.config.winTheWallByCell.length < WTW_SNAKE.length) {
+    state.config.winTheWallByCell.push(null);
+  }
+  state.config.winTheWallByCell[cellIndex] = songId;
+}
+
 // Set one or more WTW gate prizes. `null` clears a gate back to the default. Missing keys
 // leave the existing override untouched.
 export function setWtwPrizes(state: GameState, updates: { gate3?: number | null; gate5?: number | null; gate6?: number | null }): void {
@@ -394,6 +409,7 @@ export function resetConfig(state: GameState): void {
     winTheWallLineup: [],
     winTheWallPrizes: {},
     winTheWallByInstrument: {},
+    winTheWallByCell: [],
     roundPrizes: {},
     songShowdownTossUpPrize: undefined,
     demoLineup: {},
@@ -416,6 +432,7 @@ export function importConfig(state: GameState, config: GameConfig): void {
     winTheWallLineup: config.winTheWallLineup ?? [],
     winTheWallPrizes: config.winTheWallPrizes ?? {},
     winTheWallByInstrument: config.winTheWallByInstrument ?? {},
+    winTheWallByCell: config.winTheWallByCell ?? [],
     roundPrizes: config.roundPrizes ?? {},
     songShowdownTossUpPrize: config.songShowdownTossUpPrize,
     demoLineup: config.demoLineup ?? {},
@@ -2621,14 +2638,31 @@ function wtwStemIdForCell(song: Song | null, cellIdx: number): number | null {
   return (match ?? song.stems[0]).id ?? null;
 }
 
-// Pick the next song for the current snake cell. Prefers songs tagged for the cell's
-// starting instrument via config.winTheWallByInstrument; falls back to the next unused
-// song in wtwLineup. Returns { song, lineupIndex } — lineupIndex is the position of the
-// chosen song in wtwLineup (or the current index if not found in the lineup).
+// Pick the next song for the current snake cell. Priority order:
+//   1. winTheWallByCell[currentCell] — producer's direct cell→song assignment.
+//   2. winTheWallByInstrument[currentCellInstrument] — legacy per-instrument pool.
+//   3. Next unused song in wtwLineup — ordered fallback.
+// Each cell in the snake has a unique song per the producer's curated grid; this picker
+// fires whenever a new song is about to start (round begin, post-correct skip,
+// walkaway decline, auto-skip, manual skip). Returns { song, lineupIndex } where
+// lineupIndex is the position of the chosen song in wtwLineup (or current index if absent).
 function wtwPickNextSong(state: GameState): { song: Song | null; lineupIndex: number } {
   const used = new Set(state.wtwUsedSongIds);
-  const instrument = wtwCellInstrument(state.wtwMusicianIndex);
-  // Try the instrument-tagged pool first
+  const cellIdx = state.wtwMusicianIndex;
+  const instrument = wtwCellInstrument(cellIdx);
+
+  // 1) Per-cell assignment (primary mechanism)
+  const byCell = state.config.winTheWallByCell ?? [];
+  const cellId = byCell[cellIdx];
+  if (cellId) {
+    const song = getSongById(cellId);
+    if (song && !used.has(cellId)) {
+      const idxInLineup = state.wtwLineup.findIndex(s => s.id === cellId);
+      return { song, lineupIndex: idxInLineup >= 0 ? idxInLineup : state.wtwSongIndex };
+    }
+  }
+
+  // 2) Legacy per-instrument pool
   if (instrument) {
     const tagged = state.config.winTheWallByInstrument?.[instrument] ?? [];
     for (const id of tagged) {
@@ -2639,7 +2673,8 @@ function wtwPickNextSong(state: GameState): { song: Song | null; lineupIndex: nu
       return { song, lineupIndex: idxInLineup >= 0 ? idxInLineup : state.wtwSongIndex };
     }
   }
-  // Fallback: next unused song in the ordered lineup
+
+  // 3) Ordered lineup fallback
   for (let i = 0; i < state.wtwLineup.length; i++) {
     const song = state.wtwLineup[i];
     if (!used.has(song.id)) return { song, lineupIndex: i };

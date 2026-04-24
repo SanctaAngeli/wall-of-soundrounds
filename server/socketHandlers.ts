@@ -49,6 +49,7 @@ import {
   setWtwLineup,
   setWtwPrizes,
   setWtwByInstrument,
+  setWtwCell,
   setRoundPrizes,
   setTossUpPrize,
   setPlayerEliminated,
@@ -376,6 +377,11 @@ export function setupSocketHandlers(io: Server, state: GameState) {
       broadcastState(io, state);
     });
 
+    socket.on('host:config-set-wtw-cell', (data: { cellIndex: number; songId: string | null }) => {
+      setWtwCell(state, data.cellIndex, data.songId);
+      broadcastState(io, state);
+    });
+
     socket.on('host:config-set-round-prizes', (data: { round: '5to1' | 'music-auction' | 'song-in-5-parts' | 'song-showdown'; values: number[] | null }) => {
       setRoundPrizes(state, data.round, data.values);
       broadcastState(io, state);
@@ -531,7 +537,12 @@ export function setupSocketHandlers(io: Server, state: GameState) {
         return;
       }
       if (state.roundType === 'win-the-wall') {
-        // Treat as a "skip" — burns 5 musicians and moves on (WTW has no manual next outside of this)
+        // Route the universal NEXT SONG button through the same path as the WTW-specific skip
+        // button so the ticker actually restarts on the new song. Before this, host:next-song
+        // loaded audio + faded in stems but never called startWtwTicker — so instruments
+        // stopped advancing after the first song and only the opening stem ever played.
+        // (Producer bug 2026-04-23.)
+        wtwClearTimer(state);
         sendAudioCommand(io, { action: 'fade-all-out', duration: 300 });
         wtwSkipSong(state);
         if (state.phase === 'wtw-playing' && state.currentSong) {
@@ -540,6 +551,7 @@ export function setupSocketHandlers(io: Server, state: GameState) {
             sendAudioCommand(io, { action: 'play' });
             for (const sid of state.activeStems) sendAudioCommand(io, { action: 'fade-in-stem', stemId: sid, duration: 300 });
             broadcastState(io, state);
+            startWtwTicker();
           }, 200);
         }
         broadcastState(io, state);

@@ -1207,104 +1207,147 @@ export function SetupScreen() {
             );
           })()}
 
-          {/* Win the Wall: 5-column starting-instrument editor.
-              For each snake cell, the runtime picks the next song from the column matching
-              the cell's instrument (col 0=Drums ... col 4=Vocals) before falling back to the
-              main lineup. A song can be tagged for multiple instruments. Empty columns just
-              mean "no preference — use the main lineup". */}
+          {/* Win the Wall: 5×3 cell-by-cell song assignment grid, matching the wall layout.
+              The snake path runs: bottom L→R (cells 1-5) → middle R→L (cells 6-10) →
+              top L→R (cells 11-15). Each cell owns ONE song — whenever WTW needs to start a
+              fresh song (round begin, post-correct skip, decline-walkaway), the picker
+              loads that cell's song and opens on the cell's instrument stem. Producer
+              curates which song fits which starting instrument; a song that opens strong
+              on Keys belongs at cells 3, 8, or 13 (all Keys).  */}
           {activeRoundTab === 'win-the-wall' && (() => {
-            const INSTRUMENTS: { name: 'Drums' | 'Bass' | 'Keys' | 'Guitar' | 'Vocals'; icon: string; color: string }[] = [
-              { name: 'Drums',  icon: '🥁', color: '#ff4444' },
-              { name: 'Bass',   icon: '🎸', color: '#ff8800' },
-              { name: 'Keys',   icon: '🎹', color: '#ffd700' },
-              { name: 'Guitar', icon: '🎸', color: '#44ff88' },
-              { name: 'Vocals', icon: '🎤', color: '#00d4ff' },
-            ];
-            const byInstrument = config.winTheWallByInstrument ?? {};
+            const byCell = config.winTheWallByCell ?? [];
+            // Grid cells in visual order (row 0 = top of wall, row 2 = bottom). Each entry
+            // carries its snake index (0-14) + instrument so we can render the right label
+            // and write to the right slot on drop.
+            const WTW_COLS = ['Drums', 'Bass', 'Keys', 'Guitar', 'Vocals'] as const;
+            const COL_META: Record<string, { icon: string; color: string }> = {
+              Drums:  { icon: '🥁', color: '#ff4444' },
+              Bass:   { icon: '🎸', color: '#ff8800' },
+              Keys:   { icon: '🎹', color: '#ffd700' },
+              Guitar: { icon: '🎸', color: '#44ff88' },
+              Vocals: { icon: '🎤', color: '#00d4ff' },
+            };
+            // Snake: bottom L→R (0-4), middle R→L (5-9), top L→R (10-14).
+            // Rendered top→bottom, left→right. So for each visual (row, col):
+            //   row 0 (top):    snakeIdx = 10 + col                   (L→R)
+            //   row 1 (middle): snakeIdx = 9 - col                    (R→L when visually L→R)
+            //   row 2 (bottom): snakeIdx = col                        (L→R)
+            const snakeIdxFor = (row: number, col: number): number => {
+              if (row === 0) return 10 + col;
+              if (row === 1) return 9 - col;
+              return col;
+            };
             return (
-              <div style={{ marginTop: '14px', padding: '12px', background: '#0a0a1a', border: '1px solid #8b5cf644', borderRadius: '8px' }}>
-                <div style={{ fontSize: '0.72rem', color: '#8b5cf6', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '6px' }}>
-                  Starting-instrument pools
+              <div style={{ marginTop: '14px', padding: '12px', background: '#0a0a1a', border: '1px solid #ffd70044', borderRadius: '8px' }}>
+                <div style={{ fontSize: '0.72rem', color: '#ffd700', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '6px' }}>
+                  Wall songs (drag a song into each cell)
                 </div>
                 <div style={{ fontSize: '0.65rem', color: '#8080a0', marginBottom: '10px', fontStyle: 'italic' }}>
-                  Tag each song with the instrument(s) it opens well on. When WTW needs the next song mid-round, it picks from the column matching the current snake cell (e.g. cell 2 = Keys → picks first unused song from the Keys column). A song can go in multiple columns. Empty columns fall back to the main lineup above.
+                  Each of the 15 cells holds the song that plays <em>if a new song starts at that position</em>.
+                  Snake path: bottom L→R, middle R→L, top L→R (numbers shown top-left of each cell).
+                  Pick songs that open strong on the cell's instrument — e.g. a keys-forward intro for the Keys cells (3, 8, 13).
+                  Empty cells fall back to the ordered lineup above.
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '6px' }}>
-                  {INSTRUMENTS.map(inst => {
-                    const songIds = byInstrument[inst.name] ?? [];
-                    const dropId = `wtw-inst-${inst.name}`;
-                    const isHot = dragOverRound === dropId;
-                    const removeSong = (id: string) => emit('host:config-set-wtw-by-instrument', {
-                      instrument: inst.name,
-                      songIds: songIds.filter(x => x !== id),
-                    });
-                    return (
-                      <div
-                        key={inst.name}
-                        onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setDragOverRound(dropId); }}
-                        onDragLeave={() => setDragOverRound(null)}
-                        onDrop={e => {
-                          e.preventDefault();
-                          setDragOverRound(null);
-                          const songId = e.dataTransfer.getData('application/x-wos-song');
-                          if (!songId) return;
-                          if (songIds.includes(songId)) return;   // already tagged for this instrument
-                          emit('host:config-set-wtw-by-instrument', {
-                            instrument: inst.name,
-                            songIds: [...songIds, songId],
-                          });
-                        }}
-                        style={{
-                          padding: '6px', minHeight: '180px',
-                          background: isHot ? `${inst.color}20` : '#1a1a3a',
-                          border: isHot ? `2px dashed ${inst.color}` : `1px dashed ${inst.color}55`,
-                          borderRadius: '6px',
-                          display: 'flex', flexDirection: 'column', gap: '4px',
-                        }}
-                      >
-                        <div style={{
-                          display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          gap: '4px', padding: '4px 0 6px 0',
-                          borderBottom: `1px solid ${inst.color}33`,
-                          fontSize: '0.65rem', fontWeight: 900, letterSpacing: '0.1em',
-                          color: inst.color, textTransform: 'uppercase',
-                        }}>
-                          <span>{inst.icon}</span>
-                          <span>{inst.name}</span>
-                        </div>
-                        {songIds.length === 0 && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gridTemplateRows: 'repeat(3, 1fr)', gap: '6px' }}>
+                  {[0, 1, 2].flatMap(row =>
+                    [0, 1, 2, 3, 4].map(col => {
+                      const snakeIdx = snakeIdxFor(row, col);
+                      const instrument = WTW_COLS[col];
+                      const meta = COL_META[instrument];
+                      const assignedId = byCell[snakeIdx] ?? null;
+                      const song = assignedId ? songById(assignedId) : null;
+                      const dropId = `wtw-cell-${snakeIdx}`;
+                      const isHot = dragOverRound === dropId;
+                      return (
+                        <div
+                          key={snakeIdx}
+                          onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setDragOverRound(dropId); }}
+                          onDragLeave={() => setDragOverRound(null)}
+                          onDrop={e => {
+                            e.preventDefault();
+                            setDragOverRound(null);
+                            const songId = e.dataTransfer.getData('application/x-wos-song');
+                            if (!songId) return;
+                            emit('host:config-set-wtw-cell', { cellIndex: snakeIdx, songId });
+                          }}
+                          style={{
+                            position: 'relative', minHeight: '92px',
+                            padding: '6px 8px',
+                            background: isHot ? `${meta.color}22` : assignedId ? '#1a1a3a' : '#0a0a1a88',
+                            border: isHot
+                              ? `2px dashed ${meta.color}`
+                              : assignedId ? `1px solid ${meta.color}77` : `1px dashed ${meta.color}44`,
+                            borderRadius: '6px',
+                            display: 'flex', flexDirection: 'column', justifyContent: 'center',
+                          }}
+                        >
+                          {/* Snake index badge */}
                           <div style={{
-                            fontSize: '0.6rem', color: '#606080', fontStyle: 'italic',
-                            textAlign: 'center', padding: '10px 4px',
+                            position: 'absolute', top: 3, left: 5,
+                            fontSize: '0.55rem', fontWeight: 900,
+                            color: meta.color, letterSpacing: '0.05em',
                           }}>
-                            drop songs here
+                            #{snakeIdx + 1}
                           </div>
-                        )}
-                        {songIds.map(id => {
-                          const song = songById(id);
-                          return (
-                            <div key={id} style={{
-                              display: 'flex', alignItems: 'center', gap: '4px',
-                              padding: '4px 6px', background: `${inst.color}15`,
-                              border: `1px solid ${inst.color}44`, borderRadius: '4px',
-                              fontSize: '0.65rem',
-                            }}>
-                              <span style={{ flex: 1, color: '#fff', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                {song?.title ?? id}
-                              </span>
-                              <button
-                                onClick={() => removeSong(id)}
-                                style={{ background: 'none', border: 'none', color: '#ff6666', cursor: 'pointer', padding: 0, fontSize: '0.85rem', lineHeight: 1 }}
-                                title="Remove from this instrument's pool"
-                              >
-                                ✕
-                              </button>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    );
-                  })}
+                          {/* Instrument label + icon */}
+                          <div style={{
+                            position: 'absolute', top: 3, right: 5,
+                            fontSize: '0.55rem', fontWeight: 800,
+                            color: meta.color, letterSpacing: '0.05em',
+                            textTransform: 'uppercase',
+                            display: 'flex', alignItems: 'center', gap: '2px',
+                          }}>
+                            <span style={{ fontSize: '0.75rem' }}>{meta.icon}</span>
+                            {instrument}
+                          </div>
+                          {/* Song slot */}
+                          <div style={{ marginTop: '14px' }}>
+                            {song ? (
+                              <div style={{
+                                display: 'flex', alignItems: 'center', gap: '4px',
+                                background: `${meta.color}15`,
+                                border: `1px solid ${meta.color}55`,
+                                borderRadius: '4px', padding: '5px 6px',
+                                fontSize: '0.68rem',
+                              }}>
+                                <span style={{
+                                  flex: 1, color: '#fff', fontWeight: 700,
+                                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                                }}>
+                                  {song.title}
+                                </span>
+                                <button
+                                  onClick={() => emit('host:config-set-wtw-cell', { cellIndex: snakeIdx, songId: null })}
+                                  style={{
+                                    background: 'none', border: 'none', color: '#ff6666',
+                                    cursor: 'pointer', padding: 0, fontSize: '0.8rem', lineHeight: 1,
+                                  }}
+                                  title="Clear this cell"
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            ) : assignedId ? (
+                              // Assigned but the song id isn't in the library right now — surface it clearly
+                              <div style={{
+                                fontSize: '0.6rem', color: '#ff6666', fontStyle: 'italic',
+                                textAlign: 'center', padding: '4px',
+                              }}>
+                                missing: {assignedId}
+                              </div>
+                            ) : (
+                              <div style={{
+                                fontSize: '0.6rem', color: '#606080', fontStyle: 'italic',
+                                textAlign: 'center', padding: '4px',
+                              }}>
+                                drop a song
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
                 </div>
               </div>
             );
