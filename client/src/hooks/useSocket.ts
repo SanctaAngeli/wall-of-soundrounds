@@ -40,7 +40,10 @@ export function useSocket({ role, playerId, onAudioCommand }: UseSocketOptions):
       setConnected(false);
     });
 
-    // All screens listen for audio commands
+    // All screens listen for audio commands. /wall is the canonical playback surface but
+    // /host and /player tabs (often on different machines / locations during a live show)
+    // also play so the host and contestants hear what's broadcasting. Setup has its own
+    // local audio engine and bypasses this entirely.
     socket.on('wall:audio', (cmd: AudioCommand) => {
       onAudioCommandRef.current?.(cmd);
     });

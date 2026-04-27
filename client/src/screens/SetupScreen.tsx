@@ -1018,7 +1018,7 @@ export function SetupScreen() {
               '5to1': 'Fewer stems = bigger prize. Song 5 is worth the most (hardest to guess with only 1 stem).',
               'music-auction': 'More musicians = smaller prize. The player bidding for the FEWEST musicians wins the most cash.',
               'song-in-5-parts': 'Prize increases left to right across the 5 columns. Total possible payout if all columns are won.',
-              'song-showdown': 'Ladder drops as each musician joins (slot 1 plays alone). Songs 4–6 are automatically doubled on top of these base values.',
+              'song-showdown': 'Ladder drops as each musician joins (slot 1 plays alone). Same values across all 6 songs.',
             };
             const defaults = DEFAULTS[round];
             const labels = TIER_LABELS[round];

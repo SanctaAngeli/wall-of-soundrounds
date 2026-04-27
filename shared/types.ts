@@ -148,7 +148,7 @@ export interface WallState {
   showdownRows?: { row: number; year: number; songId: string; selected: boolean; done: boolean }[];
   showdownController?: PlayerId | null;     // whose turn to pick a year
   showdownTier?: number;                     // 0-4 into current ladder (fewer stems = earlier tier = more cash)
-  showdownLadder?: number[];                 // 5-entry ladder, already doubled if songsPlayed >= 3
+  showdownLadder?: number[];                 // 5-entry ladder, same values across all 6 songs
   showdownSongsPlayed?: number;              // 0-6
   showdownLockedPlayers?: PlayerId[];        // wrong-buzz lockout for current showdown song only
   showdownSelectedRow?: number;              // 1-3 of the wall row currently playing; 2 during toss-up

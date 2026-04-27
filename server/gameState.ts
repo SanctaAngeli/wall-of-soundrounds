@@ -2398,12 +2398,10 @@ function pickRandomActivePlayer(state: GameState): PlayerId {
   return active[Math.floor(Math.random() * active.length)];
 }
 
-// 5-entry base ladder doubled for the back half (songs 4-6).
-// Host can override the base via /setup → Song Showdown → Prize ladder.
+// 5-entry base ladder. Producer feedback 2026-04-26: same values across all 6 songs,
+// no doubling for the back half. Host can override the base via /setup → Song Showdown.
 export function showdownLadder(state: GameState): number[] {
-  const base = resolveRoundPrizes(state, 'song-showdown');
-  const multiplier = state.showdownSongsPlayed >= 3 ? 2 : 1;
-  return base.map(v => v * multiplier);
+  return resolveRoundPrizes(state, 'song-showdown');
 }
 
 export function showdownClearTimer(state: GameState): void {
