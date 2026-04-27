@@ -217,17 +217,86 @@ export function createInitialState(): GameState {
     showScoresOverlay: false,
     demoMode: false,
     demoSnapshot: null,
-    config: {
-      roundLineups: {},
-      anotherLevelGroupSongs: {},
-      partsColumnOverrides: {},
-      stemOrderBySong: {},
-      musicAuctionOverrides: {},
-      songYearOverrides: {},
-      // Song Showdown toss-up defaults to a broadly-known song not in any other round's pool.
-      // Host can swap via /setup → Song Showdown tab → Toss Up picker.
-      songShowdownTossUp: '',
+    config: defaultGameConfig(),
+  };
+}
+
+// Producer-curated defaults baked from Jessie's exported config (2026-04-26). Seeds a fresh
+// Render boot with the round lineups, stem arrangements, WTW per-cell songs, and Music
+// Auction prize ladder she's running on Monday — host can still override anything via /setup
+// or via Import. The WTW middle-row cells (5-9) are remapped from her file because the snake
+// was reversed: her old middle-right Vocals song now sits at new idx 9 (middle-right of the
+// L→R snake), not idx 5.
+function defaultGameConfig(): GameConfig {
+  return {
+    roundLineups: {
+      'song-showdown': [
+        'oops-i-did-it-again', 'the-joker', 'tainted-love', 'poker-face',
+        'surfin-usa', 'kiss-froma-rose', 'love-story', 'break-my-heart',
+      ],
+      '5to1': [
+        'let-it-go', 'i-dont-want-to-miss-a-thing', 'tik-tok',
+        'rocket-man', 'superstition',
+      ],
+      'music-auction': [
+        'humble', 'livin-la-vida-loca', 'johnny-b-goode', 'virtual-insanity',
+      ],
+      'win-the-wall': [],
     },
+    anotherLevelGroupSongs: {},
+    partsColumnOverrides: {},
+    // Per-song stem arrangement (5-slot order). Slot 1 plays alone in 5to1's last song,
+    // gets the $15k offer in Bet the Beat, etc.
+    stemOrderBySong: {
+      'all-night-long': [2, 1, 3, 5, 4],
+      'oops-i-did-it-again': [3, 4, 1, 2, 5],
+      'poker-face': [2, 4, 3, 1, 5],
+      'the-joker': [2, 4, 1, 10, 7],
+      'tainted-love': [2, 1, 3, 5, 4],
+      'break-my-heart': [2, 4, 1, 5, 3],
+      'rocket-man': [1, 3, 2, 4, 5],
+      'humble': [3, 5, 1, 4, 2],
+      'livin-la-vida-loca': [4, 1, 10, 2, 3],
+      'johnny-b-goode': [3, 2, 1, 4, 5],
+      'virtual-insanity': [1, 2, 3, 4, 5],
+      'i-dont-want-to-miss-a-thing': [1, 2, 5, 4, 3],
+      'im-just-a-kid': [1, 2, 3, 4, 5],
+    },
+    musicAuctionOverrides: {},
+    songYearOverrides: {},
+    songShowdownLineup: [],
+    songShowdownTossUp: '',
+    winTheWallLineup: [],
+    winTheWallPrizes: {
+      4: 'DOUBLE',
+      6: 250000,
+    },
+    winTheWallByInstrument: {},
+    // 15-cell snake assignment in the new L→R-everywhere snake. Indices 5-9 (middle row)
+    // remapped from Jessie's export so each song still pairs with its original opening
+    // instrument.
+    winTheWallByCell: [
+      'we-are-family',           // 0  bottom L → Drums
+      'all-i-wanna-do',          // 1  bottom    Bass
+      'loser',                   // 2  bottom    Keys
+      'california-dreamin',      // 3  bottom    Guitar
+      'whatta-man',              // 4  bottom R  Vocals
+      'toxic',                   // 5  middle L → Drums  (was old idx 9)
+      'espresso',                // 6  middle    Bass    (was old idx 8)
+      'thank-you-next',          // 7  middle    Keys    (was old idx 7)
+      'love-story',              // 8  middle    Guitar  (was old idx 6)
+      'big-girls-dont-cry',      // 9  middle R  Vocals  (was old idx 5)
+      'hey-ya',                  // 10 top L →   Drums
+      'stand-by-me',             // 11 top       Bass
+      'hot-in-herre',            // 12 top       Keys
+      'girls-just-wanna-have-fun', // 13 top     Guitar
+      'white-wedding',           // 14 top R     Vocals
+    ],
+    roundPrizes: {
+      'music-auction': [10000, 5000, 2500, 1000, 0],
+    },
+    songShowdownTossUpPrize: undefined,
+    demoLineup: {},
   };
 }
 
@@ -338,20 +407,46 @@ export function setWtwCell(state: GameState, cellIndex: number, songId: string |
   state.config.winTheWallByCell[cellIndex] = songId;
 }
 
-// Set one or more WTW gate prizes. `null` clears a gate back to the default. Missing keys
-// leave the existing override untouched.
-export function setWtwPrizes(state: GameState, updates: { gate3?: number | null; gate5?: number | null; gate6?: number | null }): void {
+// Set one or more WTW song prize/label values. Number → cash payout. String → display label
+// (no cash effect). null clears the entry. Missing fields leave existing values untouched.
+// Accepts both the new song1..6 keys and legacy gate3/gate5/gate6 keys for back-compat with
+// older host clients still in flight.
+export function setWtwPrizes(state: GameState, updates: {
+  song1?: number | string | null;
+  song2?: number | string | null;
+  song3?: number | string | null;
+  song4?: number | string | null;
+  song5?: number | string | null;
+  song6?: number | string | null;
+  gate3?: number | null;
+  gate5?: number | null;
+  gate6?: number | null;
+}): void {
   if (!state.config.winTheWallPrizes) state.config.winTheWallPrizes = {};
-  const prizes = state.config.winTheWallPrizes as Record<number, number | undefined>;
-  const apply = (milestone: 3 | 5 | 6, v: number | null | undefined) => {
+  const prizes = state.config.winTheWallPrizes as Record<number, number | string | undefined>;
+  const apply = (song: 1 | 2 | 3 | 4 | 5 | 6, v: number | string | null | undefined) => {
     if (v === undefined) return;
-    if (v === null) { delete prizes[milestone]; return; }
-    if (!Number.isFinite(v)) return;
-    prizes[milestone] = Math.max(0, Math.round(v));
+    if (v === null) { delete prizes[song]; return; }
+    if (typeof v === 'string') {
+      const trimmed = v.trim();
+      if (!trimmed) { delete prizes[song]; return; }
+      // Numeric strings → store as number so the runtime payout still works.
+      const asNum = Number(trimmed);
+      prizes[song] = Number.isFinite(asNum) && trimmed.match(/^[\d.]+$/) ? Math.max(0, Math.round(asNum)) : trimmed;
+      return;
+    }
+    if (Number.isFinite(v)) prizes[song] = Math.max(0, Math.round(v));
   };
-  apply(3, updates.gate3);
-  apply(5, updates.gate5);
-  apply(6, updates.gate6);
+  apply(1, updates.song1);
+  apply(2, updates.song2);
+  apply(3, updates.song3);
+  apply(4, updates.song4);
+  apply(5, updates.song5);
+  apply(6, updates.song6);
+  // Legacy aliases (old client builds)
+  if (updates.gate3 !== undefined) apply(3, updates.gate3);
+  if (updates.gate5 !== undefined) apply(5, updates.gate5);
+  if (updates.gate6 !== undefined) apply(6, updates.gate6);
 }
 
 // Resolve the year to show for a song — config override beats the baked-in year.
@@ -397,23 +492,9 @@ export function setTossUpPrize(state: GameState, value: number | null): void {
 }
 
 export function resetConfig(state: GameState): void {
-  state.config = {
-    roundLineups: {},
-    anotherLevelGroupSongs: {},
-    partsColumnOverrides: {},
-    stemOrderBySong: {},
-    musicAuctionOverrides: {},
-    songYearOverrides: {},
-    songShowdownLineup: [],
-    songShowdownTossUp: '',
-    winTheWallLineup: [],
-    winTheWallPrizes: {},
-    winTheWallByInstrument: {},
-    winTheWallByCell: [],
-    roundPrizes: {},
-    songShowdownTossUpPrize: undefined,
-    demoLineup: {},
-  };
+  // Reset goes back to the producer-curated defaults (Jessie's pre-show config) rather than
+  // an empty stub. If the host wants a truly blank slate they can clear individual fields.
+  state.config = defaultGameConfig();
 }
 
 export function importConfig(state: GameState, config: GameConfig): void {
@@ -883,6 +964,7 @@ export function deriveWallState(state: GameState): WallState {
       gate5: resolveWtwPrize(state, 5),
       gate6: resolveWtwPrize(state, 6),
     } : undefined,
+    wtwLadder: state.roundType === 'win-the-wall' ? buildWtwLadder(state) : undefined,
     showScoresOverlay: state.showScoresOverlay,
     demoMode: state.demoMode,
   };
@@ -905,6 +987,21 @@ function buildShowdownRows(state: GameState): { row: number; year: number; songI
       done: false,
     };
   });
+}
+
+// Resolved per-song ladder for the wall's right-side display. 6 rows in songs-played order
+// (1 = bottom row of pyramid, 6 = top). Each entry carries the display label and any cash
+// payout. Pulls from config.winTheWallPrizes via resolveWtwPrize/resolveWtwLabel.
+function buildWtwLadder(state: GameState): { song: number; label: string | null; cash: number }[] {
+  const out: { song: number; label: string | null; cash: number }[] = [];
+  for (let s = 1; s <= 6; s++) {
+    out.push({
+      song: s,
+      label: resolveWtwLabel(state, s),
+      cash: resolveWtwPrize(state, s),
+    });
+  }
+  return out;
 }
 
 // Win the Wall: list of cell indices (0-14 snake positions) already spent. wtwMusicianIndex is the
@@ -1101,6 +1198,7 @@ export function deriveHostState(state: GameState): HostState {
       gate5: resolveWtwPrize(state, 5),
       gate6: resolveWtwPrize(state, 6),
     } : undefined,
+    wtwLadder: state.roundType === 'win-the-wall' ? buildWtwLadder(state) : undefined,
     showScoresOverlay: state.showScoresOverlay,
     demoMode: state.demoMode,
   };
@@ -2583,18 +2681,33 @@ export function resolveWtwLineup(state: GameState): string[] {
   return roundSongSets['win-the-wall'] ?? [];
 }
 
-// Resolve the cash value awarded at a given songs-won milestone. Host can override the 3
-// default gate values ($50k / $100k / $250k) per-show via GameConfig.winTheWallPrizes.
-// Non-gate milestones (1, 2, 4) return 0 — they're blank on the pyramid and don't offer a
-// walkaway. All three milestones (3, 5, 6) are pure additions on top of banked earnings.
+// Resolve the cash payout for a given songs-won milestone (1-6). Returns 0 for songs that
+// don't pay out cash (label-only entries or empty rows). The label entries (e.g. "DOUBLE" at
+// song 4) read via resolveWtwLabel separately.
 export function resolveWtwPrize(state: GameState, milestone: number): number {
-  // Only milestones 3, 5, 6 ever have a value. Narrow through the paying-gate union so TS
-  // accepts indexing into Partial<Record<3 | 5 | 6, number>>.
-  if (milestone !== 3 && milestone !== 5 && milestone !== 6) return 0;
-  const gate = milestone as 3 | 5 | 6;
-  const override = state.config.winTheWallPrizes?.[gate];
-  if (typeof override === 'number') return override;
-  return WTW_WALKAWAY_OFFERS_DEFAULT[gate] ?? 0;
+  if (milestone < 1 || milestone > 6) return 0;
+  const song = milestone as 1 | 2 | 3 | 4 | 5 | 6;
+  const v = state.config.winTheWallPrizes?.[song];
+  if (typeof v === 'number' && Number.isFinite(v)) return Math.max(0, Math.round(v));
+  if (typeof v === 'string') return 0; // label-only, no cash
+  // Fall back to legacy default (kept around so old configs without the explicit keys still
+  // produce something on the ladder).
+  return WTW_WALKAWAY_OFFERS_DEFAULT[song] ?? 0;
+}
+
+// Read the display label for a given songs-won milestone, if any. Returns the raw string
+// for label-only entries (e.g. "DOUBLE"), the formatted money string for cash entries, or
+// null for blank rows. Used by the wall ladder renderer.
+export function resolveWtwLabel(state: GameState, milestone: number): string | null {
+  if (milestone < 1 || milestone > 6) return null;
+  const song = milestone as 1 | 2 | 3 | 4 | 5 | 6;
+  const v = state.config.winTheWallPrizes?.[song];
+  if (typeof v === 'string' && v.trim()) return v;
+  if (typeof v === 'number' && Number.isFinite(v) && v > 0) return formatMoney(Math.round(v));
+  // Legacy fallback (so existing showtime configs still surface gate amounts as labels).
+  const legacy = WTW_WALKAWAY_OFFERS_DEFAULT[song];
+  if (legacy && legacy > 0) return formatMoney(legacy);
+  return null;
 }
 
 function pickWtwSurvivor(state: GameState): PlayerId {
@@ -2781,8 +2894,15 @@ export function wtwAdvanceMusician(state: GameState): { stemId: number | null; a
   return { stemId: nextStemId, autoSkipped: false, bust: false };
 }
 
-// Correct buzz: full wall mix celebration, song counts. If we hit a gate (3 or 5) → offer walkaway.
-// If hit 6 → wall goes gold, jackpot.
+// Correct buzz handling. Producer's current model (2026-04-26) drops the walkaway-offer
+// phase entirely — every correct just plays the full mix, song counts up, host advances.
+// The two cash events:
+//   - Song 4 correct → DOUBLE the survivor's pre-WTW banked total (wtwStartingScore is the
+//     snapshot taken at round start). That doubled amount replaces the player's score, and
+//     wtwStartingScore is updated so a later bust still preserves the doubled value.
+//   - Song 6 correct → JACKPOT. Adds resolveWtwPrize(state, 6) on top.
+// Returns shape kept atGate/jackpot for back-compat with old callers (atGate is now always
+// false since gates no longer pause the round).
 export function wtwMarkCorrect(state: GameState): { newSongsWon: number; atGate: boolean; jackpot: boolean } {
   if (state.roundType !== 'win-the-wall') return { newSongsWon: 0, atGate: false, jackpot: false };
   wtwClearTimer(state);
@@ -2790,35 +2910,39 @@ export function wtwMarkCorrect(state: GameState): { newSongsWon: number; atGate:
   state.buzzedPlayer = null;
   state.visualEffect = 'correct';
 
+  // Song 4 = DOUBLE milestone. Double the player's banked score (snapshot taken at round
+  // start so a future bust still preserves the doubled value). Triggered only the first time
+  // wtwSongsWon hits exactly 4 — defensive in case wtwMarkCorrect somehow runs twice.
+  if (state.wtwSongsWon === 4 && state.wtwSurvivor) {
+    const survivor = state.wtwSurvivor;
+    const before = state.wtwStartingScore;
+    const doubled = before * 2;
+    // Replace the player's score with the doubled banked total. Anything they earned during
+    // WTW so far (which under the new rules is nothing — songs 1-3 don't pay) stays merged.
+    const earnedDuringWtw = state.players[survivor].score - before;
+    state.players[survivor].score = doubled + Math.max(0, earnedDuringWtw);
+    state.wtwStartingScore = doubled;
+    state.message = `DOUBLE! ${formatMoney(before)} → ${formatMoney(doubled)}`;
+  } else {
+    state.message = `Song ${state.wtwSongsWon}/6 correct`;
+  }
+
   if (state.wtwSongsWon >= 6) {
-    // Jackpot! Full wall mix, gold state. Top prize (defaults to $250k, host-configurable).
+    // Jackpot: top prize (default $250k, host-configurable) on top of everything they've
+    // banked. Wall goes gold.
     const jackpot = resolveWtwPrize(state, 6);
     if (state.wtwSurvivor) state.players[state.wtwSurvivor].score += jackpot;
     state.phase = 'wtw-gold';
     state.message = `JACKPOT! ${formatMoney(jackpot)}`;
     state.visualEffect = 'gold';
     state.isAudioPlaying = true;
-    // Celebrate with all stems of the current song
     if (state.currentSong) state.activeStems = state.currentSong.stems.map(s => s.id);
     return { newSongsWon: state.wtwSongsWon, atGate: false, jackpot: true };
   }
 
-  const walkaway = resolveWtwPrize(state, state.wtwSongsWon);
-  if (walkaway) {
-    state.wtwWalkawayOffered = walkaway;
-    state.phase = 'wtw-walkaway-offer';
-    state.message = `${formatMoney(walkaway)} — walk away or keep going?`;
-    state.isAudioPlaying = true;
-    if (state.currentSong) state.activeStems = state.currentSong.stems.map(s => s.id);
-    return { newSongsWon: state.wtwSongsWon, atGate: true, jackpot: false };
-  }
-
-  // Between-gate song (songs 1, 2, 4) — full-mix celebration, phase moves to 'wtw-song-won'
-  // so the host's "Next Song" button knows to advance the snake by one cell (rather than
-  // interpreting the press as an abandon-mid-song, which left the new song starting on the
-  // just-guessed cell — the glitch we fixed on 2026-04-22).
+  // Non-jackpot correct (songs 1-5) — full-mix celebration, phase 'wtw-song-won' so the
+  // host's NEXT SONG button knows to advance the snake by one cell.
   state.phase = 'wtw-song-won';
-  state.message = `Song ${state.wtwSongsWon}/6 correct`;
   state.isAudioPlaying = true;
   if (state.currentSong) state.activeStems = state.currentSong.stems.map(s => s.id);
   return { newSongsWon: state.wtwSongsWon, atGate: false, jackpot: false };

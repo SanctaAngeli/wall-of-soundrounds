@@ -80,13 +80,11 @@ export function WallScreen() {
       {visualEffect === 'buzz' && <div style={styles.buzzOverlay} />}
       {visualEffect === 'gold' && <div style={styles.goldOverlay} />}
 
-      {/* Round info header */}
+      {/* Round info header — just the round name, larger and unencumbered.
+          Producer feedback 2026-04-26: drop the SONG X OF Y subline and bump the title. */}
       {phase !== 'lobby' && (
         <div style={styles.header}>
           <div style={styles.roundBadge}>{roundName}</div>
-          {totalSongs > 0 && (
-            <div style={styles.songCount}>SONG {songNumber} OF {totalSongs}</div>
-          )}
         </div>
       )}
 
@@ -212,6 +210,7 @@ export function WallScreen() {
           {wallState.roundType === 'song-showdown' && showdownRows
             && phase !== 'showdown-toss-up'
             && !(wallState.showdownSongsPlayed === 0 && wallState.showdownSelectedRow === 2)  // covers 'buzzed' / 'result' mid-toss-up
+            && (phase === 'showdown-year-pick' || phase === 'showdown-armed' || phase === 'round-intro')
             && (
             <div style={{
               position: 'absolute', inset: 0,
@@ -535,6 +534,77 @@ export function WallScreen() {
               </div>
             );
           })()}
+
+          {/* Win the Wall right-side prize ladder.
+              6 rows, song 6 at top (jackpot) → song 1 at bottom. Each row shows whatever
+              the host-configured label resolves to (number formatted as money, or a free
+              text label like "DOUBLE"). The current song's row glows gold; achieved rows
+              get a "won" tint; future rows stay dim. Replaces the old top-right pyramid
+              and matches the visual language of the Song Showdown ladder. */}
+          {wallState.roundType === 'win-the-wall' && wallState.wtwLadder && wallState.wtwLadder.length === 6
+            && phase !== 'round-intro' && phase !== 'round-complete' && (
+            <div style={{
+              position: 'absolute',
+              left: 'calc(100% + 18px)', top: 0, bottom: 0,
+              width: 'clamp(160px, 16vw, 240px)',
+              display: 'flex', flexDirection: 'column',
+              gap: 'clamp(3px, 0.5vh, 6px)',
+              padding: '10px 8px',
+              background: 'linear-gradient(180deg, #1a1a3add, #0a0a1add)',
+              border: '1px solid #ffd70044',
+              borderRadius: '10px',
+              zIndex: 5,
+            }}>
+              <div style={{
+                fontSize: 'clamp(0.55rem, 0.9vw, 0.7rem)',
+                fontWeight: 900, color: '#ffd700',
+                letterSpacing: '0.1em', textTransform: 'uppercase',
+                textAlign: 'center', padding: '2px 0 6px 0',
+                borderBottom: '1px solid #ffd70033',
+              }}>
+                Prize Ladder
+              </div>
+              {/* Render songs 6→1 top-to-bottom (highest tier on top). */}
+              {[...wallState.wtwLadder].sort((a, b) => b.song - a.song).map(row => {
+                const songsWon = wtwSongsWon ?? 0;
+                const isCurrent = row.song === songsWon + 1;
+                const isWon = row.song <= songsWon;
+                const showLabel = row.label;
+                return (
+                  <div key={row.song} style={{
+                    flex: 1,
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '6px 10px',
+                    background: isCurrent
+                      ? 'linear-gradient(90deg, #ffd70055, #ffd70022)'
+                      : isWon ? '#ffd70022' : '#1a1a3a88',
+                    border: `1.5px solid ${isCurrent ? '#ffd700' : isWon ? '#ffd70077' : '#22224455'}`,
+                    borderRadius: '6px',
+                    boxShadow: isCurrent ? '0 0 24px #ffd70088' : 'none',
+                    opacity: !isCurrent && !isWon && !showLabel ? 0.4 : 1,
+                    transform: isCurrent ? 'scale(1.04)' : 'scale(1)',
+                    transition: 'all 0.4s ease',
+                  }}>
+                    <div style={{
+                      fontSize: 'clamp(0.55rem, 0.8vw, 0.68rem)',
+                      color: isCurrent ? '#ffd700' : isWon ? '#ffd700cc' : '#8080a0',
+                      fontWeight: 800, letterSpacing: '0.05em',
+                    }}>
+                      SONG {row.song}
+                    </div>
+                    <div style={{
+                      fontSize: 'clamp(0.85rem, 1.5vw, 1.2rem)',
+                      fontWeight: 900, fontFamily: 'Montserrat',
+                      color: isCurrent ? '#fff' : isWon ? '#ffd700' : showLabel ? '#aaa' : '#444',
+                      textShadow: isCurrent ? '0 0 12px #ffd70099' : 'none',
+                    }}>
+                      {showLabel ?? '—'}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
@@ -573,79 +643,12 @@ export function WallScreen() {
       )}
 
       {/* ============================================ */}
-      {/* WIN THE WALL prize pyramid + survivor chip    */}
+      {/* WIN THE WALL — jackpot/bust overlays only      */}
+      {/* (right-side prize ladder is rendered inside    */}
+      {/*  the wallContainer above, like Showdown)       */}
       {/* ============================================ */}
       {wallState.roundType === 'win-the-wall' && phase !== 'lobby' && phase !== 'round-complete' && (
         <>
-          <div style={{
-            position: 'absolute', top: '80px', right: '40px', zIndex: 10,
-            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3,
-          }}>
-            {(() => {
-              // 3 paying gates (3, 5, 6) pull their values from the resolved host config.
-              // Songs 1, 2, 4 are blank by design — no walkaway, no milestone cash.
-              const g3 = wtwPrizes?.gate3 ?? 50_000;
-              const g5 = wtwPrizes?.gate5 ?? 100_000;
-              const g6 = wtwPrizes?.gate6 ?? 250_000;
-              return [
-                { songs: 6, prize: g6 },
-                { songs: 5, prize: g5 },
-                { songs: 4, prize: null },
-                { songs: 3, prize: g3 },
-                { songs: 2, prize: null },
-                { songs: 1, prize: null },
-              ].map(tier => {
-                const reached = (wtwSongsWon ?? 0) >= tier.songs;
-                const isOffer = phase === 'wtw-walkaway-offer' && tier.prize != null && wtwCurrentOffer === tier.prize;
-                const isPaying = tier.prize != null;
-                const width = 100 + tier.songs * 20;
-                return (
-                  <div key={tier.songs} style={{
-                    width: `${width}px`, padding: '4px 12px',
-                    background: reached ? '#ffd70033' : isOffer ? '#ffd70055' : '#0a0a1a99',
-                    border: `1px solid ${reached ? '#ffd700' : isOffer ? '#ffd700' : isPaying ? '#666' : '#222'}`,
-                    borderRadius: 4, textAlign: 'center',
-                    fontFamily: 'Montserrat', fontSize: '0.8rem', fontWeight: 800,
-                    color: reached ? '#ffd700' : isOffer ? '#ffd700' : isPaying ? '#bbb' : '#444',
-                    animation: isOffer ? 'glow-pulse 1s ease-in-out infinite' : 'none',
-                  }}>
-                    {isPaying ? formatMoney(tier.prize!) : '—'}
-                  </div>
-                );
-              });
-            })()}
-          </div>
-          {/* Musician-this-song indicator */}
-          <div style={{
-            position: 'absolute', top: '80px', left: '50%', transform: 'translateX(-50%)', zIndex: 10,
-            display: 'flex', gap: 12, background: '#0a0a1acc', padding: '6px 16px', borderRadius: 20,
-            border: '1px solid #ffd70044',
-          }}>
-            <span style={{ fontSize: '0.75rem', color: '#a0a0b0', fontWeight: 700, letterSpacing: '0.1em' }}>
-              SONG {(wtwSongsWon ?? 0) + 1} · MUSICIAN {(wtwMusicianIndex ?? 0) + 1}/15 · THIS SONG {wtwMusiciansThisSong ?? 0}/5
-            </span>
-          </div>
-          {/* Walkaway decision overlay */}
-          {phase === 'wtw-walkaway-offer' && wtwCurrentOffer != null && (
-            <div style={{
-              position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-              background: 'linear-gradient(180deg, #1a1a3a, #0a0a1a)',
-              border: '4px solid #ffd700', borderRadius: 24,
-              padding: '30px 60px', zIndex: 40,
-              boxShadow: '0 0 80px #ffd70080', textAlign: 'center',
-            }}>
-              <div style={{ fontSize: '0.9rem', color: '#ffd700', fontWeight: 700, letterSpacing: '0.3em' }}>
-                TAKE THE CASH?
-              </div>
-              <div style={{ fontSize: 'clamp(3rem, 8vw, 6rem)', fontWeight: 900, color: '#ffd700', margin: '12px 0',
-                            textShadow: '0 0 40px #ffd70080' }}>
-                {formatMoney(wtwCurrentOffer)}
-              </div>
-              <div style={{ fontSize: '0.85rem', color: '#a0a0b0' }}>
-                OR KEEP GOING FOR THE NEXT TIER
-              </div>
-            </div>
-          )}
           {phase === 'wtw-gold' && (
             <div style={{
               position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
@@ -1261,12 +1264,12 @@ const styles: Record<string, React.CSSProperties> = {
   roundBadge: {
     background: 'linear-gradient(135deg, #ffd700, #ff8c00)',
     color: '#000',
-    padding: '6px 24px',
-    borderRadius: '20px',
+    padding: '12px 40px',
+    borderRadius: '28px',
     fontFamily: 'Montserrat',
-    fontWeight: 800,
-    fontSize: '1rem',
-    letterSpacing: '0.1em',
+    fontWeight: 900,
+    fontSize: 'clamp(1.4rem, 2.4vw, 2rem)',
+    letterSpacing: '0.12em',
   },
   songCount: {
     fontSize: '0.75rem',

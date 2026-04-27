@@ -916,10 +916,12 @@ export function setupSocketHandlers(io: Server, state: GameState) {
     // WIN THE WALL EVENTS
     // ============================================
     // Snake ticker: every 5s → advance to next musician, play that cell's stem for the current
-    // song. Cleared on buzz / correct / walkaway / skip / bust.
+    // song. Cleared on buzz / correct / skip / bust. The first tick after a fresh song load
+    // gets a +2s pad (7s) so the audience hears the opening instrument before anything stacks
+    // — producer feedback 2026-04-26 ("the first instrument just barely plays before next").
     const startWtwTicker = () => {
       wtwClearTimer(state);
-      state.wtwTimerInterval = setInterval(() => {
+      const tick = () => {
         if (state.roundType !== 'win-the-wall' || state.phase !== 'wtw-playing') {
           wtwClearTimer(state);
           return;
@@ -929,8 +931,11 @@ export function setupSocketHandlers(io: Server, state: GameState) {
         if (bust) {
           sendAudioCommand(io, { action: 'stop' });
           wtwClearTimer(state);
+          broadcastState(io, state);
+          return;
         } else if (autoSkipped) {
-          // Song died (5 musicians spent with no guess) — cut all audio, load next song, start fresh
+          // Song died (5 musicians spent with no guess) — cut all audio, load next song,
+          // start fresh ticker (which itself starts with the +2s pad).
           sendAudioCommand(io, { action: 'fade-all-out', duration: 300 });
           setTimeout(() => {
             sendAudioCommand(io, { action: 'stop' });
@@ -941,14 +946,22 @@ export function setupSocketHandlers(io: Server, state: GameState) {
                 for (const sid of state.activeStems) {
                   sendAudioCommand(io, { action: 'fade-in-stem', stemId: sid, duration: 300 });
                 }
+                broadcastState(io, state);
+                startWtwTicker();
               }, 200);
             }
           }, 320);
+          return;
         } else if (stemId != null) {
           sendAudioCommand(io, { action: 'fade-in-stem', stemId, duration: 500 });
         }
         broadcastState(io, state);
-      }, 5000);
+        // Schedule the next tick. All subsequent intervals are 5s (only the very first
+        // gap after a fresh song load is padded).
+        state.wtwTimerInterval = setTimeout(tick, 5000);
+      };
+      // First gap = 7s (5s base + 2s pad).
+      state.wtwTimerInterval = setTimeout(tick, 7000);
     };
 
     socket.on('host:wtw-set-survivor', (data: { playerId: PlayerId }) => {

@@ -38,11 +38,12 @@ app.use('/audio', express.static(path.join(publicDir, 'audio')));
     song.stems = song.stems.filter(s => exists(s.file));
     if (song.extraStems) song.extraStems = song.extraStems.filter(s => exists(s.file));
     // Detect pre-rendered prove-out file. If present, the prove-out host button will load and
-    // play this single MP3 instead of fading all stems in — matches producer expectation of
-    // hearing the actual full mix the band recorded. PROVE_OUT.mp3 beats FULL.mp3 if both
-    // exist (future-proofs a dedicated prove-out file alongside the import-script FULL mix).
+    // play this single MP3 instead of fading all stems in. ONLY PROVE_OUT.mp3 — the older
+    // FULL.mp3 (auto-generated from the band's 21_22 Print Master) was producing
+    // half-duration mixes for some songs (toxic, oops, etc.) which loop as doubletime over
+    // the original stem cadence. Producer flagged 2026-04-26. When the band sends real
+    // prove-out files, drop them in as PROVE_OUT.mp3.
     if (exists('PROVE_OUT.mp3')) song.proveOutFile = 'PROVE_OUT.mp3';
-    else if (exists('FULL.mp3')) song.proveOutFile = 'FULL.mp3';
     dropped += (beforePrimary - song.stems.length) + (beforeExtras - (song.extraStems?.length ?? 0));
   }
   if (dropped > 0) console.log(`[library] filtered out ${dropped} declared-but-missing stem file(s)`);

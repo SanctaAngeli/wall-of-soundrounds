@@ -516,25 +516,24 @@ export const roundPrizes: Record<RoundType, number[]> = {
   'win-the-wall': [0, 0, 0, 50000, 50000, 100000], // walkaway values keyed by (songsWon after the song)
 };
 
-// Win the Wall cash milestones. Only 3 tiers pay out: song 3, song 5, song 6.
-// Songs 1, 2, 4 are blank on the pyramid (no walkaway offer, no jackpot milestone).
-// The amounts below are DEFAULTS — host can override per-show via GameConfig.winTheWallPrizes.
-// All amounts are ADDITIVE on top of whatever the survivor banked in R1–R5 (i.e. the series
-// total keeps growing; the final can only add to it, never subtract). If they bust before a
-// gate, they still walk with whatever they brought into the final — see wtwStartingScore.
+// Win the Wall fallback prize map for songs that have no override set. Producer's current
+// design (2026-04-26) drops the walkaway-offer phase entirely — songs 1-3, 5 are blank;
+// song 4 is the DOUBLE milestone (handled via resolveWtwLabel + the song-4 doubling
+// mechanic in wtwMarkCorrect); song 6 pays the jackpot. Host can still override per-song
+// via /setup → Win the Wall → Prize ladder.
 export const WTW_WALKAWAY_OFFERS_DEFAULT: Record<number, number> = {
-  3: 50_000,
-  5: 100_000,
   6: 250_000,
 };
 
-// Win the Wall snake path through the 15 cells: bottom row L→R → middle row R→L → top row L→R.
-// Each entry is [row, col] zero-indexed where row 0 = top, row 2 = bottom. Index 14 = top-right
-// Vocals cell = "the last note" referenced in the round spec.
+// Win the Wall snake path through the 15 cells: every row L→R so each new song starts on
+// Drums (col 0). Producer feedback 2026-04-26: the original "boustrophedon" snake (middle
+// row R→L) caused the audience to see vocals twice in a row at the bottom→middle transition
+// and drums twice at the middle→top transition, since the col stays the same when reversing.
+// Each entry is [row, col] zero-indexed where row 0 = top, row 2 = bottom.
 export const WTW_SNAKE: ReadonlyArray<readonly [number, number]> = [
   [2, 0], [2, 1], [2, 2], [2, 3], [2, 4],  // bottom L→R
-  [1, 4], [1, 3], [1, 2], [1, 1], [1, 0],  // middle R→L
-  [0, 0], [0, 1], [0, 2], [0, 3], [0, 4],  // top L→R (ends top-right)
+  [1, 0], [1, 1], [1, 2], [1, 3], [1, 4],  // middle L→R
+  [0, 0], [0, 1], [0, 2], [0, 3], [0, 4],  // top L→R (ends top-right Vocals)
 ];
 
 // Song in 5 Parts: 5 questions, each with a target song + 2 herring songs

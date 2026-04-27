@@ -159,7 +159,10 @@ export interface WallState {
   wtwSurvivor?: PlayerId | null;             // who's playing
   wtwCurrentOffer?: number | null;           // walkaway tier displayed at a gate (50k / 100k / 250k)
   wtwStartingScore?: number;                 // survivor's banked total at round start — shown on bust
-  wtwPrizes?: { gate3: number; gate5: number; gate6: number };  // resolved cash for the 3 gates
+  wtwPrizes?: { gate3: number; gate5: number; gate6: number };  // legacy — kept for back-compat
+  // Resolved 6-row prize ladder for the Win the Wall right-side display.
+  // Each entry: { song: 1-6, label: string|null (display), cash: number (payout on correct, 0 if label-only) }.
+  wtwLadder?: { song: number; label: string | null; cash: number }[];
   // Host-triggered narrative pause: shows a big "here's where everyone is" scoreboard overlay
   // on the wall. Can be toggled at any phase without affecting the underlying round state.
   showScoresOverlay?: boolean;
@@ -281,6 +284,7 @@ export interface HostState {
   wtwLineupSize?: number;
   wtwStartingScore?: number;
   wtwPrizes?: { gate3: number; gate5: number; gate6: number };
+  wtwLadder?: { song: number; label: string | null; cash: number }[];
   showScoresOverlay?: boolean;
   demoMode?: boolean;
   // Current editable config — shown in /setup and used to drive round lineups at selection time
@@ -408,7 +412,20 @@ export interface ClientEvents {
   'host:config-set-tossup-prize': { value: number | null };
   // Edit one or more of the 3 Win-the-Wall cash gates. Only the keys included get updated.
   // Pass `null` for a value to reset that gate to the hard-coded default ($50k/$100k/$250k).
-  'host:config-set-wtw-prizes': { gate3?: number | null; gate5?: number | null; gate6?: number | null };
+  // Set one or more song-N prize/label values. Each field is number | string | null.
+  // null clears, string is a label, number is cash. Songs 1-6.
+  'host:config-set-wtw-prizes': {
+    song1?: number | string | null;
+    song2?: number | string | null;
+    song3?: number | string | null;
+    song4?: number | string | null;
+    song5?: number | string | null;
+    song6?: number | string | null;
+    // Legacy aliases — old clients still send gate3/5/6. Server accepts both.
+    gate3?: number | null;
+    gate5?: number | null;
+    gate6?: number | null;
+  };
   'host:config-set-demo-lineup': { round: RoundType; songIds: string[] };
   // Song Showdown toss-up song. Pass empty string to remove / skip toss-up.
   'host:config-set-showdown-tossup': { songId: string };
@@ -522,10 +539,13 @@ export interface GameConfig {
   // instrument as the opening stem. Entries are song IDs or null (falls through to legacy
   // per-instrument tag, then to winTheWallLineup). Producer-curated grid editor in /setup.
   winTheWallByCell?: (string | null)[];
-  // Win the Wall: per-gate cash values (songs 3, 5, 6). Overrides the hard-coded
-  // $50k / $100k / $250k defaults. Missing keys fall through to the default.
-  // All three are ADDITIVE on top of banked earnings from earlier rounds.
-  winTheWallPrizes?: Partial<Record<3 | 5 | 6, number>>;
+  // Win the Wall: per-song prize/label values for songs 1-6.
+  // Number → cash payout added on a correct (e.g. song 6 = 250000 jackpot).
+  // String → display-only label, no cash effect (e.g. song 4 = "DOUBLE" milestone marker —
+  //   the actual doubling mechanic is hard-coded at song 4 because it's a recurring rule,
+  //   the label is just what the audience reads on the ladder).
+  // Missing keys → row shows blank.
+  winTheWallPrizes?: Partial<Record<1 | 2 | 3 | 4 | 5 | 6, number | string>>;
   // Per-round prize ladders (5 values each, same shape as hardcoded defaults in songs.ts).
   // Song Showdown: runtime still doubles for songs 4-6 on top of this base.
   // Missing round key / wrong length → fall back to default.

@@ -358,68 +358,32 @@ export function HostScreen() {
                   </>
                 )}
 
-                {/* Prize pyramid — only 3 paying tiers (songs 3, 5, 6). 1/2/4 are blank. */}
-                {phase !== 'round-intro' && (() => {
-                  const g3 = wtwPrizes?.gate3 ?? 50_000;
-                  const g5 = wtwPrizes?.gate5 ?? 100_000;
-                  const g6 = wtwPrizes?.gate6 ?? 250_000;
-                  const tiers: { songs: number; prize: number | null; label: string }[] = [
-                    { songs: 6, prize: g6,   label: 'JACKPOT' },
-                    { songs: 5, prize: g5,   label: 'GATE' },
-                    { songs: 4, prize: null, label: '' },
-                    { songs: 3, prize: g3,   label: 'GATE' },
-                    { songs: 2, prize: null, label: '' },
-                    { songs: 1, prize: null, label: '' },
-                  ];
-                  return (
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, marginBottom: 12 }}>
-                      {tiers.map(tier => {
-                        const reached = (wtwSongsWon ?? 0) >= tier.songs;
-                        const isNext = (wtwSongsWon ?? 0) + 1 === tier.songs;
-                        const isPaying = tier.prize != null;
-                        return (
-                          <div key={tier.songs} style={{
-                            width: `${40 + tier.songs * 10}%`,
-                            padding: '4px 10px',
-                            background: reached ? '#ffd70033' : isNext ? '#ffd70011' : 'transparent',
-                            border: `1px solid ${reached ? '#ffd700' : isNext ? '#ffd70066' : isPaying ? '#666' : '#222'}`,
-                            borderRadius: 4, textAlign: 'center',
-                            fontSize: '0.8rem', fontWeight: 700,
-                            color: reached ? '#ffd700' : isPaying ? '#bbb' : '#555',
-                          }}>
-                            Song {tier.songs} · {isPaying ? formatMoney(tier.prize!) : '—'}
-                            {tier.label && <span style={{ fontSize: '0.6rem', opacity: 0.7, marginLeft: 8 }}>{tier.label}</span>}
-                          </div>
-                        );
-                      })}
-                      {(wtwStartingScore ?? 0) > 0 && (
-                        <div style={{ fontSize: '0.65rem', color: '#8080a0', marginTop: 4, fontStyle: 'italic' }}>
-                          All prizes are on top of {formatMoney(wtwStartingScore!)} banked from earlier rounds
+                {/* Prize ladder — 6-row read-only mirror of what the audience sees on the
+                    wall. Reads from hostState.wtwLadder (resolved labels per song). */}
+                {phase !== 'round-intro' && hostState.wtwLadder && (
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 4, marginBottom: 12 }}>
+                    {[...hostState.wtwLadder].sort((a, b) => b.song - a.song).map(row => {
+                      const reached = (wtwSongsWon ?? 0) >= row.song;
+                      const isNext = (wtwSongsWon ?? 0) + 1 === row.song;
+                      return (
+                        <div key={row.song} style={{
+                          padding: '4px 10px', display: 'flex', justifyContent: 'space-between',
+                          background: reached ? '#ffd70033' : isNext ? '#ffd70011' : 'transparent',
+                          border: `1px solid ${reached ? '#ffd700' : isNext ? '#ffd70066' : row.label ? '#666' : '#222'}`,
+                          borderRadius: 4,
+                          fontSize: '0.8rem', fontWeight: 700,
+                          color: reached ? '#ffd700' : row.label ? '#bbb' : '#555',
+                        }}>
+                          <span>Song {row.song}</span>
+                          <span>{row.label ?? '—'}</span>
                         </div>
-                      )}
-                    </div>
-                  );
-                })()}
-
-                {/* Walkaway offer */}
-                {phase === 'wtw-walkaway-offer' && (
-                  <div style={{ background: '#1a1a3a', border: '2px solid #ffd700', borderRadius: 8, padding: 14, marginBottom: 10 }}>
-                    <div style={{ fontSize: '0.75rem', color: '#ffd700', fontWeight: 700, letterSpacing: '0.1em' }}>
-                      DECISION TIME
-                    </div>
-                    <div style={{ fontSize: '1rem', margin: '6px 0' }}>
-                      Walk with <b style={{ color: '#ffd700' }}>{formatMoney(currentPrize)}</b> or keep going?
-                    </div>
-                    <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                      <button onClick={() => emit('host:wtw-walkaway-accept')}
-                        style={{ ...styles.controlBtn, flex: 1, background: '#00ff88', color: '#000' }}>
-                        ✓ WALK (+{formatMoney(currentPrize)})
-                      </button>
-                      <button onClick={() => emit('host:wtw-walkaway-decline')}
-                        style={{ ...styles.controlBtn, flex: 1, background: '#ff8c00', color: '#000' }}>
-                        KEEP GOING →
-                      </button>
-                    </div>
+                      );
+                    })}
+                    {(wtwStartingScore ?? 0) > 0 && (
+                      <div style={{ fontSize: '0.65rem', color: '#8080a0', marginTop: 4, fontStyle: 'italic' }}>
+                        Prizes stack on top of {formatMoney(wtwStartingScore!)} banked from earlier rounds.
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -1139,10 +1103,11 @@ export function HostScreen() {
               </div>
             )}
 
-            {/* Prove-out button lives OUTSIDE the judge panel so pressing it after CORRECT doesn't
-                override the scoring action (producer feedback 2026-04-23). Visible whenever a song
-                is loaded and we're not mid-setup or inside a phase with its own dedicated button. */}
-            {currentSong && !buzzedPlayer && phase !== 'lobby' && phase !== 'round-intro' && phase !== 'round-complete' && phase !== 'auction-offers' && phase !== 'auction-bidding' && (
+            {/* Prove-out button — ALWAYS visible during gameplay (producer feedback 2026-04-26:
+                "needs to be a button that's always there instead of popping up"). Lives outside
+                the judge panel so pressing it doesn't override CORRECT/WRONG. Press after
+                CORRECT to play the band's full mix as the song reveals on the wall. */}
+            {currentSong && phase !== 'lobby' && phase !== 'round-intro' && phase !== 'round-complete' && phase !== 'auction-offers' && phase !== 'auction-bidding' && (
               <div style={{ ...styles.section, padding: '10px 12px' }}>
                 <button
                   onClick={() => emit('host:prove-out')}

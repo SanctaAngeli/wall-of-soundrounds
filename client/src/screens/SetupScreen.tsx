@@ -1133,49 +1133,52 @@ export function SetupScreen() {
             );
           })()}
 
-          {/* Win the Wall: per-gate cash configuration.
-              3 paying tiers (songs 3, 5, 6). Each has a default; host can override per-show.
-              Clearing the input reverts that tier to the default value. All values are ADDITIVE
-              on top of whatever the survivor banked in earlier rounds. */}
+          {/* Win the Wall: per-song prize/label editor.
+              Songs 1-6, each accepts a free text value. Numbers are formatted as cash and
+              paid out on a correct buzz; non-numeric strings are display-only labels (e.g.
+              "DOUBLE" at song 4 — the doubling mechanic is hard-coded server-side, the
+              label is just what the audience reads on the ladder). Empty = blank row. */}
           {activeRoundTab === 'win-the-wall' && (() => {
-            const gates: { milestone: 3 | 5 | 6; label: string; def: number }[] = [
-              { milestone: 3, label: 'Song 3 walkaway',  def: 50_000  },
-              { milestone: 5, label: 'Song 5 walkaway',  def: 100_000 },
-              { milestone: 6, label: 'Song 6 JACKPOT',   def: 250_000 },
+            const songs: { song: 1 | 2 | 3 | 4 | 5 | 6; hint: string }[] = [
+              { song: 6, hint: 'JACKPOT (number = cash, e.g. 250000)' },
+              { song: 5, hint: 'leave blank for no payout' },
+              { song: 4, hint: 'DOUBLE milestone (banked × 2 mechanic is fixed)' },
+              { song: 3, hint: 'leave blank for no payout' },
+              { song: 2, hint: 'leave blank for no payout' },
+              { song: 1, hint: 'leave blank for no payout' },
             ];
             return (
               <div style={{ marginTop: '14px', padding: '12px', background: '#0a0a1a', border: '1px solid #ffd70044', borderRadius: '8px' }}>
                 <div style={{ fontSize: '0.72rem', color: '#ffd700', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '8px' }}>
-                  Cash ladder (host-configurable)
+                  Prize ladder (host-configurable)
                 </div>
                 <div style={{ fontSize: '0.65rem', color: '#8080a0', marginBottom: '10px', fontStyle: 'italic' }}>
-                  Only 3 paying tiers. Songs 1, 2, 4 are blank by design. These amounts are on top of whatever the survivor banked in earlier rounds.
+                  Type a number (e.g. <b>250000</b>) for cash payouts, or any text label (e.g. <b>DOUBLE</b>) for milestone markers. Leave blank for an empty row. The doubling-banked-money mechanic at song 4 is fixed in code; the label here is what the audience sees on the ladder.
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  {gates.map(g => {
-                    const override = config.winTheWallPrizes?.[g.milestone];
-                    const effective = override ?? g.def;
+                  {songs.map(({ song, hint }) => {
+                    const override = config.winTheWallPrizes?.[song];
+                    const display = typeof override === 'number'
+                      ? String(override)
+                      : typeof override === 'string'
+                        ? override
+                        : '';
                     return (
-                      <div key={g.milestone} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#a0a0b0', minWidth: '160px' }}>
-                          {g.label}
+                      <div key={song} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#a0a0b0', minWidth: '70px' }}>
+                          Song {song}
                         </span>
-                        <span style={{ color: '#8080a0', fontWeight: 700 }}>$</span>
                         <input
-                          type="number"
-                          min={0}
-                          step={1000}
-                          defaultValue={effective}
-                          key={`wtw-gate-${g.milestone}-${override ?? 'default'}`}
+                          type="text"
+                          defaultValue={display}
+                          placeholder={hint}
+                          key={`wtw-song-${song}-${display}`}
                           onBlur={e => {
                             const raw = e.target.value.trim();
                             if (!raw) {
-                              emit('host:config-set-wtw-prizes', { [`gate${g.milestone}`]: null } as any);
+                              emit('host:config-set-wtw-prizes', { [`song${song}`]: null } as any);
                             } else {
-                              const n = Number(raw);
-                              if (Number.isFinite(n) && n >= 0) {
-                                emit('host:config-set-wtw-prizes', { [`gate${g.milestone}`]: n } as any);
-                              }
+                              emit('host:config-set-wtw-prizes', { [`song${song}`]: raw } as any);
                             }
                           }}
                           style={{
@@ -1188,15 +1191,15 @@ export function SetupScreen() {
                         />
                         {override != null && (
                           <button
-                            onClick={() => emit('host:config-set-wtw-prizes', { [`gate${g.milestone}`]: null } as any)}
-                            title={`Reset to default ($${g.def.toLocaleString()})`}
+                            onClick={() => emit('host:config-set-wtw-prizes', { [`song${song}`]: null } as any)}
+                            title="Clear this row"
                             style={{
                               padding: '4px 10px', fontSize: '0.6rem', fontWeight: 700,
                               background: 'transparent', color: '#ff8c00',
                               border: '1px solid #ff8c0066', borderRadius: '4px', cursor: 'pointer',
                             }}
                           >
-                            RESET
+                            CLEAR
                           </button>
                         )}
                       </div>
@@ -1227,15 +1230,12 @@ export function SetupScreen() {
               Guitar: { icon: '🎸', color: '#44ff88' },
               Vocals: { icon: '🎤', color: '#00d4ff' },
             };
-            // Snake: bottom L→R (0-4), middle R→L (5-9), top L→R (10-14).
-            // Rendered top→bottom, left→right. So for each visual (row, col):
-            //   row 0 (top):    snakeIdx = 10 + col                   (L→R)
-            //   row 1 (middle): snakeIdx = 9 - col                    (R→L when visually L→R)
-            //   row 2 (bottom): snakeIdx = col                        (L→R)
+            // Snake: every row L→R (bottom 0-4, middle 5-9, top 10-14). Rendered visually
+            // top→bottom, left→right.
             const snakeIdxFor = (row: number, col: number): number => {
-              if (row === 0) return 10 + col;
-              if (row === 1) return 9 - col;
-              return col;
+              if (row === 0) return 10 + col;   // top row L→R
+              if (row === 1) return 5 + col;    // middle row L→R
+              return col;                        // bottom row L→R
             };
             return (
               <div style={{ marginTop: '14px', padding: '12px', background: '#0a0a1a', border: '1px solid #ffd70044', borderRadius: '8px' }}>
@@ -1244,7 +1244,7 @@ export function SetupScreen() {
                 </div>
                 <div style={{ fontSize: '0.65rem', color: '#8080a0', marginBottom: '10px', fontStyle: 'italic' }}>
                   Each of the 15 cells holds the song that plays <em>if a new song starts at that position</em>.
-                  Snake path: bottom L→R, middle R→L, top L→R (numbers shown top-left of each cell).
+                  Snake path: bottom L→R, middle L→R, top L→R (numbers shown top-left of each cell).
                   Pick songs that open strong on the cell's instrument — e.g. a keys-forward intro for the Keys cells (3, 8, 13).
                   Empty cells fall back to the ordered lineup above.
                 </div>
