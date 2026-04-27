@@ -395,19 +395,25 @@ export function HostScreen() {
                     <span style={{ marginLeft: 10 }}>Next gate: {formatMoney(wtwJackpotIfWon ?? 0)}</span>
                   </div>
                 )}
-                {(phase === 'wtw-playing' || phase === 'wtw-song-won') && (
+                {(phase === 'wtw-playing' || phase === 'wtw-song-won' || phase === 'wtw-song-failed') && (
                   <button onClick={() => emit('host:wtw-skip')}
                     title={phase === 'wtw-song-won'
                       ? 'Move on to the next song — the snake advances by one cell and a new song starts on that instrument.'
-                      : 'Move on to the next song in the lineup. No musicians burned — the new song picks up at the current snake cell.'}
+                      : phase === 'wtw-song-failed'
+                        ? '5 musicians spent without a guess. Press to move on — the next song starts past the spent cells.'
+                        : 'Move on to the next song in the lineup. No musicians burned — the new song picks up at the current snake cell.'}
                     style={{
                       ...styles.controlBtn,
-                      background: phase === 'wtw-song-won' ? '#00ff88' : '#00d4ff',
+                      background: phase === 'wtw-song-won' ? '#00ff88'
+                                : phase === 'wtw-song-failed' ? '#ff8c00'
+                                : '#00d4ff',
                       color: '#000', width: '100%', fontWeight: 900,
-                      padding: phase === 'wtw-song-won' ? '16px' : undefined,
-                      fontSize: phase === 'wtw-song-won' ? '1rem' : undefined,
+                      padding: (phase === 'wtw-song-won' || phase === 'wtw-song-failed') ? '16px' : undefined,
+                      fontSize: (phase === 'wtw-song-won' || phase === 'wtw-song-failed') ? '1rem' : undefined,
                     }}>
-                    {phase === 'wtw-song-won' ? '▶ START NEXT SONG' : 'NEXT SONG →'}
+                    {phase === 'wtw-song-won' ? '▶ START NEXT SONG'
+                     : phase === 'wtw-song-failed' ? '→ MOVE ON (5 SPENT)'
+                     : 'NEXT SONG →'}
                   </button>
                 )}
 

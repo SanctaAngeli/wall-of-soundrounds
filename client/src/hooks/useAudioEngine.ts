@@ -248,7 +248,7 @@ export function useAudioEngine() {
     pausedAtRef.current = 0;
   }, [pause]);
 
-  const fadeInStem = useCallback((stemId: number, duration: number = 400) => {
+  const fadeInStem = useCallback((stemId: number, duration: number = 400, targetVolume: number = 1) => {
     const stem = stemsRef.current.get(stemId);
     const ctx = audioContextRef.current;
     if (!stem || !ctx) return;
@@ -256,7 +256,9 @@ export function useAudioEngine() {
     const now = ctx.currentTime;
     stem.gainNode.gain.cancelScheduledValues(now);
     stem.gainNode.gain.setValueAtTime(stem.gainNode.gain.value, now);
-    stem.gainNode.gain.linearRampToValueAtTime(1, now + duration / 1000);
+    // Default targetVolume is 1.0; certain rounds boost specific stems (e.g. WTW vocals
+    // at 1.5 to compensate for the band's vocal mix being quieter relative to the rest).
+    stem.gainNode.gain.linearRampToValueAtTime(Math.max(0, targetVolume), now + duration / 1000);
   }, []);
 
   const fadeOutStem = useCallback((stemId: number, duration: number = 400) => {
@@ -270,14 +272,15 @@ export function useAudioEngine() {
     stem.gainNode.gain.linearRampToValueAtTime(0, now + duration / 1000);
   }, []);
 
-  const fadeAllIn = useCallback((duration: number = 400) => {
+  const fadeAllIn = useCallback((duration: number = 400, perStemVolume?: Record<number, number>) => {
     stemsRef.current.forEach((stem) => {
       const ctx = audioContextRef.current;
       if (!ctx) return;
+      const target = perStemVolume?.[stem.id] ?? 1;
       const now = ctx.currentTime;
       stem.gainNode.gain.cancelScheduledValues(now);
       stem.gainNode.gain.setValueAtTime(stem.gainNode.gain.value, now);
-      stem.gainNode.gain.linearRampToValueAtTime(1, now + duration / 1000);
+      stem.gainNode.gain.linearRampToValueAtTime(Math.max(0, target), now + duration / 1000);
     });
   }, []);
 
@@ -355,13 +358,13 @@ export function useAudioEngine() {
         setStemVolume(cmd.stemId, cmd.volume);
         break;
       case 'fade-in-stem':
-        fadeInStem(cmd.stemId, cmd.duration);
+        fadeInStem(cmd.stemId, cmd.duration, cmd.volume);
         break;
       case 'fade-out-stem':
         fadeOutStem(cmd.stemId, cmd.duration);
         break;
       case 'fade-all-in':
-        fadeAllIn(cmd.duration);
+        fadeAllIn(cmd.duration, cmd.perStemVolume);
         break;
       case 'fade-all-out':
         fadeAllOut(cmd.duration);

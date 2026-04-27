@@ -653,10 +653,13 @@ function generateWtwWallMusicians(state: GameState): WallMusician[] {
   };
 
   const isGoldPhase = state.phase === 'wtw-gold';
-  // "Playing" for the wall renderer also covers wtw-song-won (between-gate celebration) and
-  // wtw-walkaway-offer — we want the just-won song's cells to stay fully lit gold during
-  // those pauses, not revert to dim silhouettes.
-  const isPlayingPhase = state.phase === 'wtw-playing' || state.phase === 'wtw-song-won' || state.phase === 'wtw-walkaway-offer';
+  // "Playing" for the wall renderer covers all the in-round phases — the just-won song's
+  // cells stay lit gold during celebration / cap-failed / walkaway holds, not revert to
+  // dim silhouettes.
+  const isPlayingPhase = state.phase === 'wtw-playing'
+    || state.phase === 'wtw-song-won'
+    || state.phase === 'wtw-song-failed'
+    || state.phase === 'wtw-walkaway-offer';
 
   for (let row = 0; row < 3; row++) {
     for (let col = 0; col < 5; col++) {
@@ -1092,6 +1095,7 @@ export function deriveHostState(state: GameState): HostState {
     isAudioPlaying: state.isAudioPlaying,
     currentPrize: state.currentPrize,
     buzzedPlayer: state.buzzedPlayer,
+    revealText: state.revealText || undefined,
     players: state.players,
     connections: state.connections,
     songList: state.roundSongs.map(s => ({ id: s.id, title: s.title, artist: s.artist })),
@@ -2867,13 +2871,23 @@ export function wtwAdvanceMusician(state: GameState): { stemId: number | null; a
   state.wtwMusicianIndex += 1;
   state.wtwMusiciansThisSong += 1;
 
-  // Cap: min(5, cells remaining in snake from this song's start) — if only 3 cells are left
-  // when a song begins, the song only gets 3 stems before auto-skip, not 5. Prevents the audio
-  // building up to a full 5-stem mix when the wall can't even show that many more cells.
+  // Cap: min(5, cells remaining in snake from this song's start). When the cap is hit, we
+  // DO NOT auto-skip anymore (producer feedback 2026-04-26). Instead the round halts on
+  // 'wtw-song-failed' with the full mix holding so the audience hears all 5 instruments
+  // for a beat, then the host presses NEXT SONG to advance — same effect as the old
+  // auto-skip but on the host's clock.
   const cellsFromSongStart = WTW_SNAKE.length - state.wtwSongStartIndex;
   const perSongCap = Math.min(5, cellsFromSongStart);
   if (state.wtwMusiciansThisSong > perSongCap) {
-    return wtwSkipSongInternal(state, 'auto');
+    state.phase = 'wtw-song-failed';
+    state.wtwMusicianIndex -= 1;          // back off — we never actually played that extra cell
+    state.wtwMusiciansThisSong -= 1;
+    state.message = `5 musicians used — host advances when ready`;
+    state.visualEffect = 'wrong';
+    state.isAudioPlaying = true;          // full mix keeps playing under the hold
+    if (state.currentSong) state.activeStems = state.currentSong.stems.map(s => s.id);
+    wtwClearTimer(state);
+    return { stemId: null, autoSkipped: false, bust: false };
   }
 
   // Snake exhausted? Bust preserves banked earnings — they walk with wtwStartingScore, not zero.
@@ -3035,8 +3049,20 @@ export function wtwReorderLineup(state: GameState, newOrder: string[]): void {
 // (phase === 'wtw-song-won'), we advance musicianIndex by 1 so the new song starts on the
 // cell AFTER the one where the correct buzz happened.
 function wtwSkipSongInternal(state: GameState, cause: 'auto' | 'manual'): { stemId: null; autoSkipped: true; bust: boolean } {
+  // After a between-gate correct (wtw-song-won) the snake advances by one cell because
+  // the just-guessed cell is "spent". After a 5-cap timeout (wtw-song-failed) the snake
+  // advances past ALL 5 spent cells — the host's NEXT SONG press here lands on the cell
+  // after the cap, same effect as the legacy auto-skip but driven manually.
   const advanceForWonSong = cause === 'manual' && state.phase === 'wtw-song-won';
+  const advanceForFailedSong = cause === 'manual' && state.phase === 'wtw-song-failed';
   if (advanceForWonSong) state.wtwMusicianIndex += 1;
+  if (advanceForFailedSong) {
+    // Burn the rest of the cap from where the song started. wtwMusicianIndex was rolled
+    // back by 1 when the cap hit (so it points at cell 5-of-the-song); +1 to land on the
+    // first cell of the NEXT song.
+    const nextStart = state.wtwSongStartIndex + Math.min(5, WTW_SNAKE.length - state.wtwSongStartIndex);
+    state.wtwMusicianIndex = nextStart;
+  }
   wtwClearTimer(state);
   // Mark the just-finished song as used (so the next pick doesn't repeat it).
   if (state.currentSong && !state.wtwUsedSongIds.includes(state.currentSong.id)) {

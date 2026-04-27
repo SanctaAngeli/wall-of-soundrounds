@@ -64,6 +64,7 @@ export type GamePhase =
   | 'wtw-playing'                 // musician snake is ticking, buzz open
   | 'wtw-walkaway-offer'          // at 3 or 5 songs: offer walkaway vs keep-going
   | 'wtw-song-won'                // between-gate correct (songs 1, 2, 4): celebration; host taps Next Song
+  | 'wtw-song-failed'             // 5 musicians spent without a correct: full mix holds, host taps Next Song to advance
   | 'wtw-gold'                    // all 6 — wall turns gold, jackpot won (default $250k, host-configurable)
   | 'wtw-bust';                   // burned all 15 musicians without 3 — walks with nothing
 
@@ -228,6 +229,9 @@ export interface HostState {
   isAudioPlaying: boolean;
   currentPrize: number;
   buzzedPlayer: PlayerId | null;
+  // Set when the host pressed REVEAL SONG; cleared on next-song / clear-reveal. Drives the
+  // CLOSE REVEAL button's visibility on the host panel (button only shows when reveal is up).
+  revealText?: string;
   players: { 1: PlayerInfo; 2: PlayerInfo; 3: PlayerInfo };
   connections: { wall: number; player1: boolean; player2: boolean; player3: boolean; host: number };
   songList: { id: string; title: string; artist: string }[];
@@ -302,9 +306,9 @@ export type AudioCommand =
   | { action: 'pause' }
   | { action: 'stop' }
   | { action: 'set-stem-volume'; stemId: number; volume: number }
-  | { action: 'fade-in-stem'; stemId: number; duration: number }
+  | { action: 'fade-in-stem'; stemId: number; duration: number; volume?: number }
   | { action: 'fade-out-stem'; stemId: number; duration: number }
-  | { action: 'fade-all-in'; duration: number }
+  | { action: 'fade-all-in'; duration: number; perStemVolume?: Record<number, number> }
   | { action: 'fade-all-out'; duration: number }
   | { action: 'test-tone' };
 

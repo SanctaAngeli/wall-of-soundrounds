@@ -436,9 +436,9 @@ export function setupSocketHandlers(io: Server, state: GameState) {
         sendAudioCommand(io, { action: 'pause' });
       }
       // Win the Wall: full wall mix plays on correct (wtwMarkCorrect already sets activeStems).
-      // At gate → phase is wtw-walkaway-offer, music continues. At jackpot → phase is wtw-gold.
+      // Vocals get the +35% WTW boost so the celebration doesn't feel hollow.
       if (state.roundType === 'win-the-wall') {
-        sendAudioCommand(io, { action: 'fade-all-in', duration: 400 });
+        sendAudioCommand(io, { action: 'fade-all-in', duration: 400, perStemVolume: wtwPerStemVolumeMap() });
       }
       broadcastState(io, state);
     });
@@ -475,7 +475,7 @@ export function setupSocketHandlers(io: Server, state: GameState) {
       if (state.roundType === 'win-the-wall' && state.phase === 'wtw-playing') {
         sendAudioCommand(io, { action: 'play' });
         for (const sid of state.activeStems) {
-          sendAudioCommand(io, { action: 'fade-in-stem', stemId: sid, duration: 200 });
+          sendAudioCommand(io, { action: 'fade-in-stem', stemId: sid, duration: 200, volume: wtwTargetVolume(sid) });
         }
         wtwClearTimer(state);
         state.wtwTimerInterval = setInterval(() => {
@@ -538,21 +538,26 @@ export function setupSocketHandlers(io: Server, state: GameState) {
       }
       if (state.roundType === 'win-the-wall') {
         // Route the universal NEXT SONG button through the same path as the WTW-specific skip
-        // button so the ticker actually restarts on the new song. Before this, host:next-song
-        // loaded audio + faded in stems but never called startWtwTicker — so instruments
-        // stopped advancing after the first song and only the opening stem ever played.
-        // (Producer bug 2026-04-23.)
+        // button so the ticker actually restarts on the new song.
         wtwClearTimer(state);
-        sendAudioCommand(io, { action: 'fade-all-out', duration: 300 });
+        sendAudioCommand(io, { action: 'fade-all-out', duration: 200 });
+        sendAudioCommand(io, { action: 'stop' });   // hard-kill any lingering sources
         wtwSkipSong(state);
         if (state.phase === 'wtw-playing' && state.currentSong) {
-          sendAudioCommand(io, { action: 'load', songId: state.currentSong.id, stems: state.currentSong.stems });
+          // Load primary + extras so prove-out (which fades ALL stems in) has the full set
+          // available without a second load. Producer feedback 2026-04-26 (vocals too quiet
+          // on the WTW final).
+          const wtwStems = [
+            ...state.currentSong.stems,
+            ...(state.currentSong.extraStems ?? []).filter(s => s.instrument !== 'Clue'),
+          ];
+          sendAudioCommand(io, { action: 'load', songId: state.currentSong.id, stems: wtwStems });
           setTimeout(() => {
             sendAudioCommand(io, { action: 'play' });
             for (const sid of state.activeStems) sendAudioCommand(io, { action: 'fade-in-stem', stemId: sid, duration: 300 });
             broadcastState(io, state);
             startWtwTicker();
-          }, 200);
+          }, 220);
         }
         broadcastState(io, state);
         return;
@@ -599,37 +604,28 @@ export function setupSocketHandlers(io: Server, state: GameState) {
     // play the full song) as a "prove out" moment. Puts all primary+extra stems on the stack.
     socket.on('host:prove-out', () => {
       if (!state.currentSong) return;
-      // If the song has a pre-rendered PROVE_OUT.mp3 sitting in its audio folder, load THAT
-      // single file and play it — the band's real full-mix recording, not the layered stems.
-      // Detected at server startup (see server/index.ts library scrub).
-      if (state.currentSong.proveOutFile) {
-        const proveStem = {
-          id: 9000,
-          file: state.currentSong.proveOutFile,
-          instrument: 'Full Mix',
-          icon: '🎵',
-          color: '#00d4ff',
-        };
-        state.activeStems = [9000];
-        state.isAudioPlaying = true;
-        sendAudioCommand(io, { action: 'load', songId: state.currentSong.id, stems: [proveStem] });
-        // Slight delay so audio graph wires up before playing
-        setTimeout(() => {
-          sendAudioCommand(io, { action: 'play' });
-          sendAudioCommand(io, { action: 'fade-in-stem', stemId: 9000, duration: 400 });
-        }, 200);
-        broadcastState(io, state);
-        return;
-      }
-      // Fallback: fade all loaded stems in (the layered-mix approach).
-      const allStemIds = [
-        ...state.currentSong.stems.map(s => s.id),
-        ...(state.currentSong.extraStems ?? []).map(s => s.id),
+      // Producer feedback 2026-04-26: prove-out should play EVERY stem the song has —
+      // primary D/B/K/G/V plus extras (horns, BVs, percussion, named LVs). The Vocals stem
+      // alone is too quiet on the WTW final, where only primary stems were loaded; loading
+      // the named LVs + BVs together fills the mix out properly. We force a fresh load with
+      // the full pack so all stems are in stemsRef before fading them all in.
+      const allStems = [
+        ...state.currentSong.stems,
+        ...(state.currentSong.extraStems ?? []).filter(s => s.instrument !== 'Clue'),
       ];
+      const allStemIds = allStems.map(s => s.id);
       state.activeStems = allStemIds;
       state.isAudioPlaying = true;
-      sendAudioCommand(io, { action: 'play' });
-      sendAudioCommand(io, { action: 'fade-all-in', duration: 400 });
+      // Hard-stop any in-flight audio first to avoid the new full-mix overlapping with the
+      // partial mix the round was playing. Then load + play + fade-all-in.
+      sendAudioCommand(io, { action: 'stop' });
+      sendAudioCommand(io, { action: 'load', songId: state.currentSong.id, stems: allStems });
+      setTimeout(() => {
+        sendAudioCommand(io, { action: 'play' });
+        // perStemVolume only fires in WTW (returns undefined otherwise), so other rounds
+        // get a flat 1.0 fade-all-in. WTW gets vocals at 1.35.
+        sendAudioCommand(io, { action: 'fade-all-in', duration: 400, perStemVolume: wtwPerStemVolumeMap() });
+      }, 220);
       broadcastState(io, state);
     });
 
@@ -915,6 +911,24 @@ export function setupSocketHandlers(io: Server, state: GameState) {
     // ============================================
     // WIN THE WALL EVENTS
     // ============================================
+    // Producer feedback 2026-04-26: vocals on the WTW final mix sit too quietly relative to
+    // the band stems, so any stem with "Vocal" in its instrument name gets a 1.5x boost
+    // when faded in during this round. Band stems stay at 1.0 (no ducking).
+    const WTW_VOCAL_BOOST = 1.5;
+    const wtwTargetVolume = (stemId: number): number => {
+      if (state.roundType !== 'win-the-wall' || !state.currentSong) return 1;
+      const all = [...state.currentSong.stems, ...(state.currentSong.extraStems ?? [])];
+      const stem = all.find(s => s.id === stemId);
+      if (!stem) return 1;
+      return /vocal/i.test(stem.instrument) ? WTW_VOCAL_BOOST : 1;
+    };
+    const wtwPerStemVolumeMap = (): Record<number, number> | undefined => {
+      if (state.roundType !== 'win-the-wall' || !state.currentSong) return undefined;
+      const all = [...state.currentSong.stems, ...(state.currentSong.extraStems ?? [])];
+      const map: Record<number, number> = {};
+      for (const s of all) if (/vocal/i.test(s.instrument)) map[s.id] = WTW_VOCAL_BOOST;
+      return Object.keys(map).length ? map : undefined;
+    };
     // Snake ticker: every 5s → advance to next musician, play that cell's stem for the current
     // song. Cleared on buzz / correct / skip / bust. The first tick after a fresh song load
     // gets a +2s pad (7s) so the audience hears the opening instrument before anything stacks
@@ -934,26 +948,30 @@ export function setupSocketHandlers(io: Server, state: GameState) {
           broadcastState(io, state);
           return;
         } else if (autoSkipped) {
-          // Song died (5 musicians spent with no guess) — cut all audio, load next song,
-          // start fresh ticker (which itself starts with the +2s pad).
+          // Legacy path — kept for safety, but the new 5-cap behaviour halts on
+          // 'wtw-song-failed' instead of auto-skipping, so this branch is unlikely to fire.
           sendAudioCommand(io, { action: 'fade-all-out', duration: 300 });
           setTimeout(() => {
             sendAudioCommand(io, { action: 'stop' });
             if (state.currentSong) {
-              sendAudioCommand(io, { action: 'load', songId: state.currentSong.id, stems: state.currentSong.stems });
+              const wtwStems = [
+                ...state.currentSong.stems,
+                ...(state.currentSong.extraStems ?? []).filter(s => s.instrument !== 'Clue'),
+              ];
+              sendAudioCommand(io, { action: 'load', songId: state.currentSong.id, stems: wtwStems });
               setTimeout(() => {
                 sendAudioCommand(io, { action: 'play' });
                 for (const sid of state.activeStems) {
-                  sendAudioCommand(io, { action: 'fade-in-stem', stemId: sid, duration: 300 });
+                  sendAudioCommand(io, { action: 'fade-in-stem', stemId: sid, duration: 300, volume: wtwTargetVolume(sid) });
                 }
                 broadcastState(io, state);
                 startWtwTicker();
-              }, 200);
+              }, 220);
             }
           }, 320);
           return;
         } else if (stemId != null) {
-          sendAudioCommand(io, { action: 'fade-in-stem', stemId, duration: 500 });
+          sendAudioCommand(io, { action: 'fade-in-stem', stemId, duration: 500, volume: wtwTargetVolume(stemId) });
         }
         broadcastState(io, state);
         // Schedule the next tick. All subsequent intervals are 5s (only the very first
@@ -972,17 +990,22 @@ export function setupSocketHandlers(io: Server, state: GameState) {
 
     socket.on('host:wtw-start-song', () => {
       if (state.roundType !== 'win-the-wall') return;
+      sendAudioCommand(io, { action: 'stop' });   // belt-and-braces — kill any previous round audio
       const { song } = wtwStartSong(state);
       if (song) {
-        sendAudioCommand(io, { action: 'load', songId: song.id, stems: song.stems });
+        const wtwStems = [
+          ...song.stems,
+          ...(song.extraStems ?? []).filter(s => s.instrument !== 'Clue'),
+        ];
+        sendAudioCommand(io, { action: 'load', songId: song.id, stems: wtwStems });
         setTimeout(() => {
           sendAudioCommand(io, { action: 'play' });
           for (const sid of state.activeStems) {
-            sendAudioCommand(io, { action: 'fade-in-stem', stemId: sid, duration: 300 });
+            sendAudioCommand(io, { action: 'fade-in-stem', stemId: sid, duration: 300, volume: wtwTargetVolume(sid) });
           }
           broadcastState(io, state);
           startWtwTicker();
-        }, 200);
+        }, 220);
       }
       broadcastState(io, state);
     });
@@ -990,19 +1013,23 @@ export function setupSocketHandlers(io: Server, state: GameState) {
     socket.on('host:wtw-skip', () => {
       if (state.roundType !== 'win-the-wall') return;
       wtwClearTimer(state);
-      sendAudioCommand(io, { action: 'fade-all-out', duration: 300 });
+      sendAudioCommand(io, { action: 'fade-all-out', duration: 200 });
+      sendAudioCommand(io, { action: 'stop' });   // defensive against echo / overlap
       wtwSkipSong(state);
-      // If not bust, reload the fresh song and start ticker
       if (state.phase === 'wtw-playing' && state.currentSong) {
-        sendAudioCommand(io, { action: 'load', songId: state.currentSong.id, stems: state.currentSong.stems });
+        const wtwStems = [
+          ...state.currentSong.stems,
+          ...(state.currentSong.extraStems ?? []).filter(s => s.instrument !== 'Clue'),
+        ];
+        sendAudioCommand(io, { action: 'load', songId: state.currentSong.id, stems: wtwStems });
         setTimeout(() => {
           sendAudioCommand(io, { action: 'play' });
           for (const sid of state.activeStems) {
-            sendAudioCommand(io, { action: 'fade-in-stem', stemId: sid, duration: 300 });
+            sendAudioCommand(io, { action: 'fade-in-stem', stemId: sid, duration: 300, volume: wtwTargetVolume(sid) });
           }
           broadcastState(io, state);
           startWtwTicker();
-        }, 200);
+        }, 220);
       }
       broadcastState(io, state);
     });
@@ -1012,20 +1039,23 @@ export function setupSocketHandlers(io: Server, state: GameState) {
     socket.on('host:wtw-jump-to-song', (data: { lineupIndex: number }) => {
       if (state.roundType !== 'win-the-wall') return;
       wtwClearTimer(state);
-      sendAudioCommand(io, { action: 'fade-all-out', duration: 300 });
+      sendAudioCommand(io, { action: 'fade-all-out', duration: 200 });
+      sendAudioCommand(io, { action: 'stop' });   // defensive against echo
       const { song, bust } = wtwJumpToSong(state, data.lineupIndex);
-      if (bust || !song) {
-        sendAudioCommand(io, { action: 'stop' });
-      } else {
-        sendAudioCommand(io, { action: 'load', songId: song.id, stems: song.stems });
+      if (!bust && song) {
+        const wtwStems = [
+          ...song.stems,
+          ...(song.extraStems ?? []).filter(s => s.instrument !== 'Clue'),
+        ];
+        sendAudioCommand(io, { action: 'load', songId: song.id, stems: wtwStems });
         setTimeout(() => {
           sendAudioCommand(io, { action: 'play' });
           for (const sid of state.activeStems) {
-            sendAudioCommand(io, { action: 'fade-in-stem', stemId: sid, duration: 300 });
+            sendAudioCommand(io, { action: 'fade-in-stem', stemId: sid, duration: 300, volume: wtwTargetVolume(sid) });
           }
           broadcastState(io, state);
           startWtwTicker();
-        }, 200);
+        }, 220);
       }
       broadcastState(io, state);
     });
@@ -1048,14 +1078,19 @@ export function setupSocketHandlers(io: Server, state: GameState) {
     socket.on('host:wtw-walkaway-decline', () => {
       if (state.roundType !== 'win-the-wall') return;
       wtwDeclineWalkaway(state);
-      // Load next song and resume ticker
+      // Load next song and resume ticker (legacy path; walkaway phase is no longer reached
+      // under the current rules but the handler stays in case configs revive it).
       sendAudioCommand(io, { action: 'fade-all-out', duration: 300 });
       if (state.phase === 'wtw-playing' && state.currentSong) {
-        sendAudioCommand(io, { action: 'load', songId: state.currentSong.id, stems: state.currentSong.stems });
+        const wtwStems = [
+          ...state.currentSong.stems,
+          ...(state.currentSong.extraStems ?? []).filter(s => s.instrument !== 'Clue'),
+        ];
+        sendAudioCommand(io, { action: 'load', songId: state.currentSong.id, stems: wtwStems });
         setTimeout(() => {
           sendAudioCommand(io, { action: 'play' });
           for (const sid of state.activeStems) {
-            sendAudioCommand(io, { action: 'fade-in-stem', stemId: sid, duration: 300 });
+            sendAudioCommand(io, { action: 'fade-in-stem', stemId: sid, duration: 300, volume: wtwTargetVolume(sid) });
           }
           broadcastState(io, state);
           startWtwTicker();

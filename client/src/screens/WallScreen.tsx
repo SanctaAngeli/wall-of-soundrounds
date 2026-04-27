@@ -196,7 +196,7 @@ export function WallScreen() {
         phase === 'another-level-board' ||
         phase === 'showdown-year-pick' ||
         phase === 'showdown-armed' ||
-        phase === 'wtw-playing' || phase === 'wtw-walkaway-offer' || phase === 'wtw-song-won' || phase === 'wtw-gold' || phase === 'wtw-bust' ||
+        phase === 'wtw-playing' || phase === 'wtw-walkaway-offer' || phase === 'wtw-song-won' || phase === 'wtw-song-failed' || phase === 'wtw-gold' || phase === 'wtw-bust' ||
         (phase === 'round-intro' && wallState.roundType === 'another-level')) && (
         <div style={{ ...styles.wallContainer, position: 'relative' }}>
           <div style={styles.wallGrid}>
@@ -615,19 +615,16 @@ export function WallScreen() {
       {/* ============================================ */}
       {wallState.roundType === 'song-showdown' && showdownRows && phase !== 'lobby' && phase !== 'round-complete' && (
         <>
-          {/* Top chip: SONG X/6 + controller name only. The 5-tier prize ladder moved to a
-              right-side vertical display (see below) so the audience can track the money
-              dropping more dramatically. */}
-          <div style={{
-            position: 'absolute', top: '80px', left: '50%', transform: 'translateX(-50%)',
-            display: 'flex', alignItems: 'center', gap: 18, zIndex: 10,
-            background: '#0a0a1acc', padding: '6px 16px', borderRadius: 20,
-            border: '1px solid #ffd70044',
-          }}>
-            <span style={{ fontSize: '0.75rem', color: '#a0a0b0', fontWeight: 700, letterSpacing: '0.1em' }}>
-              SONG {(showdownSongsPlayed ?? 0) + 1}/6
-            </span>
-            {showdownController && (
+          {/* Top chip: controller name only. SONG X/6 dropped per producer feedback
+              2026-04-26 (the round name pill above is enough context). The 5-tier prize
+              ladder moved to a right-side vertical display below. */}
+          {showdownController && (
+            <div style={{
+              position: 'absolute', top: '80px', left: '50%', transform: 'translateX(-50%)',
+              display: 'flex', alignItems: 'center', gap: 18, zIndex: 10,
+              background: '#0a0a1acc', padding: '6px 16px', borderRadius: 20,
+              border: '1px solid #ffd70044',
+            }}>
               <span style={{
                 fontSize: '0.75rem', fontWeight: 800,
                 padding: '3px 10px', borderRadius: 8,
@@ -637,8 +634,8 @@ export function WallScreen() {
               }}>
                 {players[showdownController].name} PICKS
               </span>
-            )}
-          </div>
+            </div>
+          )}
         </>
       )}
 
